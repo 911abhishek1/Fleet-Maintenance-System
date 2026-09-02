@@ -1,0 +1,80 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  FLEET_MANAGER
+  TECHNICIAN
+}
+
+enum ServiceStatus {
+  DUE
+  OVERDUE
+  BOOKED
+  IN_SERVICE
+  COMPLETED
+}
+
+model User {
+  id            String   @id @default(uuid())
+  email         String   @unique
+  passwordHash  String
+  role          Role
+  assignments   TechnicianAssignment[]
+  auditLogs     AuditLog[]
+}
+
+model Vehicle {
+  id               String   @id @default(uuid())
+  registration     String   @unique
+  make             String
+  model            String
+  odometer         Int
+  dateIntervalDays Int
+  mileageInterval  Int
+  archived         Boolean  @default(false)
+  serviceRecords   ServiceRecord[]
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+}
+
+model ServiceRecord {
+  id                String   @id @default(uuid())
+  vehicleId         String
+  vehicle           Vehicle  @relation(fields: [vehicleId], references: [id])
+  description       String
+  status            ServiceStatus @default(DUE)
+  dateScheduled     DateTime?
+  dateCompleted     DateTime?
+  completedOdometer Int?
+  assignments       TechnicianAssignment[]
+  auditLogs         AuditLog[]
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+}
+
+model TechnicianAssignment {
+  serviceRecordId String
+  userId          String
+  serviceRecord   ServiceRecord @relation(fields: [serviceRecordId], references: [id])
+  user            User          @relation(fields: [userId], references: [id])
+
+  @@id([serviceRecordId, userId])
+}
+
+model AuditLog {
+  id              String   @id @default(uuid())
+  serviceRecordId String
+  serviceRecord   ServiceRecord @relation(fields: [serviceRecordId], references: [id])
+  changedById     String?
+  changedBy       User?    @relation(fields: [changedById], references: [id])
+  field           String
+  oldValue        String?
+  newValue        String?
+  notes           String?
+  createdAt       DateTime @default(now())
+}
