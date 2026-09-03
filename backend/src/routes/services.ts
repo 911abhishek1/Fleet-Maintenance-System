@@ -211,17 +211,74 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
 // POST /api/services/:id/assignments - Add technician (Fleet Manager)
 router.post('/:id/assignments', requireFleetManager, async (req: AuthRequest, res: Response): Promise<void> => {
   const { id } = req.params;
-  const { technicianId } = req.body;
+  const input = ((req.body.technicianId || req.body.email || '') as string).trim();
+
+  if (!input) {
+    res.status(400).json({ error: 'Technician email or ID is required' });
+    return;
+  }
+
   try {
+    // 1. Verify service record exists
+    const serviceRecord = await prisma.serviceRecord.findUnique({
+      where: { id },
+    });
+    if (!serviceRecord) {
+      res.status(404).json({ error: 'Service record not found' });
+      return;
+    }
+
+    // 2. Resolve target user (by email or ID)
+    const targetUser = input.includes('@')
+      ? await prisma.user.findUnique({ where: { email: input } })
+      : await prisma.user.findUnique({ where: { id: input } });
+
+    if (!targetUser) {
+      res.status(404).json({
+        error: input.includes('@')
+          ? `No technician found with email "${input}". Make sure they have registered.`
+          : `No technician found with ID "${input}".`,
+      });
+      return;
+    }
+
+    // 3. Verify user has role TECHNICIAN (reject Fleet Managers)
+    if (targetUser.role !== 'TECHNICIAN') {
+      res.status(400).json({
+        error: `Cannot assign user with role "${targetUser.role}". Only users with role "TECHNICIAN" can be assigned to services.`,
+      });
+      return;
+    }
+
+    // 4. Check if technician is already assigned
+    const existing = await prisma.technicianAssignment.findUnique({
+      where: {
+        serviceRecordId_userId: {
+          serviceRecordId: id,
+          userId: targetUser.id,
+        },
+      },
+    });
+
+    if (existing) {
+      res.status(400).json({ error: 'This technician is already assigned to this service' });
+      return;
+    }
+
+    // 5. Create assignment
     const assignment = await prisma.technicianAssignment.create({
       data: {
         serviceRecordId: id,
-        userId: technicianId
-      }
+        userId: targetUser.id,
+      },
+      include: {
+        user: { select: { id: true, email: true, role: true } },
+      },
     });
     res.status(201).json(assignment);
   } catch (error) {
-    res.status(400).json({ error: 'Failed to assign technician' });
+    console.error('Assign technician error:', error);
+    res.status(500).json({ error: 'Failed to assign technician' });
   }
 });
 

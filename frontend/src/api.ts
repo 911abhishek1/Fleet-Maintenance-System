@@ -41,6 +41,8 @@ export const authAPI = {
     api.post('/auth/register', { email, password, role }),
 
   logout: () => api.post('/auth/logout'),
+
+  getTechnicians: () => api.get('/auth/technicians'),
 };
 
 // --- Vehicles ---

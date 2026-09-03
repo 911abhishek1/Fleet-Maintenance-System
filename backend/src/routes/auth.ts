@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import bcrypt from 'bcrypt';
 import jwt from 'jsonwebtoken';
 import prisma from '../db';
+import { requireAuth, requireFleetManager } from '../middleware/auth';
 
 const router = Router();
 const JWT_SECRET = process.env.JWT_SECRET || 'supersecretkey';
@@ -66,6 +67,19 @@ router.post('/login', async (req: Request, res: Response): Promise<void> => {
 router.post('/logout', (req: Request, res: Response) => {
   res.clearCookie('token');
   res.json({ message: 'Logged out successfully' });
+});
+
+router.get('/technicians', requireAuth, requireFleetManager, async (_req: Request, res: Response): Promise<void> => {
+  try {
+    const technicians = await prisma.user.findMany({
+      where: { role: 'TECHNICIAN' },
+      select: { id: true, email: true },
+    });
+    res.json(technicians);
+  } catch (error) {
+    console.error('Fetch technicians error:', error);
+    res.status(500).json({ error: 'Failed to fetch technicians' });
+  }
 });
 
 export default router;

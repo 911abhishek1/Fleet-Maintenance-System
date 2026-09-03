@@ -1,4 +1,4 @@
-import { serviceAPI, vehicleAPI } from '../api';
+import { serviceAPI, vehicleAPI, authAPI } from '../api';
 import { isFleetManager } from '../state';
 import { openModal, closeModal } from '../components/modal';
 import { toastSuccess, toastError, toastInfo } from '../components/toast';
@@ -342,29 +342,52 @@ async function showAddServiceModal(pageContainer: HTMLElement): Promise<void> {
   });
 }
 
-function showAssignModal(record: ServiceRecord, pageContainer: HTMLElement): void {
+async function showAssignModal(record: ServiceRecord, pageContainer: HTMLElement): Promise<void> {
+  let registeredTechs: Array<{ id: string; email: string }> = [];
+  try {
+    const res = await authAPI.getTechnicians();
+    registeredTechs = (res.data as Array<{ id: string; email: string }>) || [];
+  } catch {
+    // Ignore fetch error
+  }
+
+  const selectOptions = registeredTechs
+    .filter((t) => !record.assignments.some((a) => a.userId === t.id))
+    .map((t) => `<option value="${t.email}">${t.email}</option>`)
+    .join('');
+
   openModal('Manage Technicians', `
     <p style="color: var(--text-secondary); font-size: var(--font-sm); margin-bottom: var(--space-4);">
       <strong>${record.vehicle.registration}</strong> — ${record.description}
     </p>
 
-    <div style="margin-bottom: var(--space-4);">
-      <strong style="font-size: var(--font-sm);">Current assignments:</strong>
+    <div style="margin-bottom: var(--space-5);">
+      <strong style="font-size: var(--font-sm);">Assigned Technicians:</strong>
       ${record.assignments.length > 0
         ? `<div style="margin-top: var(--space-2); display: flex; flex-wrap: wrap; gap: var(--space-2);">
             ${record.assignments.map((a) => `
-              <span class="badge badge-role" style="display: inline-flex; align-items: center; gap: var(--space-2);">
-                ${a.user.email}
-                <button class="remove-tech-btn" data-tech-id="${a.userId}" style="background:none; border:none; color:var(--error); cursor:pointer; font-size:var(--font-sm); padding:0;">✕</button>
+              <span class="badge badge-role" style="display: inline-flex; align-items: center; gap: var(--space-2); padding: var(--space-1) var(--space-3);">
+                👤 ${a.user.email}
+                <button class="remove-tech-btn" data-tech-id="${a.userId}" title="Remove technician" style="background:none; border:none; color:var(--error); cursor:pointer; font-size:var(--font-sm); line-height:1; padding:0 2px;">✕</button>
               </span>
             `).join('')}
           </div>`
-        : '<p style="color: var(--text-muted); font-size: var(--font-sm); margin-top: var(--space-2);">No technicians assigned.</p>'}
+        : '<p style="color: var(--text-muted); font-size: var(--font-sm); margin-top: var(--space-1);">No technicians assigned to this service yet.</p>'}
     </div>
 
+    ${selectOptions.length > 0 ? `
     <div class="form-group">
-      <label class="form-label" for="tech-id">Technician User ID</label>
-      <input type="text" id="tech-id" class="form-input" placeholder="Enter technician user ID…" />
+      <label class="form-label" for="tech-select">Select Registered Technician</label>
+      <select id="tech-select" class="form-select">
+        <option value="">-- Choose from registered technicians --</option>
+        ${selectOptions}
+      </select>
+    </div>
+    ` : ''}
+
+    <div class="form-group">
+      <label class="form-label" for="tech-email">${selectOptions.length > 0 ? 'Or Enter Technician Email' : 'Technician Email'}</label>
+      <input type="text" id="tech-email" class="form-input" placeholder="e.g. divyani@gmail.com" />
     </div>
   `, `
     <button class="btn btn-secondary" id="modal-cancel">Close</button>
@@ -372,6 +395,17 @@ function showAssignModal(record: ServiceRecord, pageContainer: HTMLElement): voi
   `);
 
   document.getElementById('modal-cancel')!.addEventListener('click', closeModal);
+
+  // Sync select with input
+  const techSelect = document.getElementById('tech-select') as HTMLSelectElement | null;
+  const techInput = document.getElementById('tech-email') as HTMLInputElement;
+  if (techSelect) {
+    techSelect.addEventListener('change', () => {
+      if (techSelect.value) {
+        techInput.value = techSelect.value;
+      }
+    });
+  }
 
   // Remove technician
   document.querySelectorAll('.remove-tech-btn').forEach((btn) => {
@@ -382,26 +416,28 @@ function showAssignModal(record: ServiceRecord, pageContainer: HTMLElement): voi
         toastSuccess('Technician removed');
         closeModal();
         await loadAndRender(pageContainer);
-      } catch {
-        toastError('Failed', 'Could not remove technician.');
+      } catch (err: unknown) {
+        const axErr = err as { response?: { data?: { error?: string } } };
+        toastError('Failed', axErr.response?.data?.error ?? 'Could not remove technician.');
       }
     });
   });
 
   // Assign
   document.getElementById('modal-submit')!.addEventListener('click', async () => {
-    const techId = (document.getElementById('tech-id') as HTMLInputElement).value.trim();
-    if (!techId) {
-      toastError('Validation', 'Please enter a technician ID.');
+    const techValue = techInput.value.trim();
+    if (!techValue) {
+      toastError('Validation', 'Please select or enter a technician email.');
       return;
     }
     try {
-      await serviceAPI.assignTechnician(record.id, techId);
-      toastSuccess('Technician assigned');
+      await serviceAPI.assignTechnician(record.id, techValue);
+      toastSuccess('Technician assigned successfully');
       closeModal();
       await loadAndRender(pageContainer);
-    } catch {
-      toastError('Failed', 'Could not assign technician. Check the user ID.');
+    } catch (err: unknown) {
+      const axErr = err as { response?: { data?: { error?: string } } };
+      toastError('Failed', axErr.response?.data?.error ?? 'Could not assign technician.');
     }
   });
 }
