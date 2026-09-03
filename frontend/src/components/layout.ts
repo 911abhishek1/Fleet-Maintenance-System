@@ -31,6 +31,11 @@ export function renderLayout(appEl: HTMLElement): void {
             <span class="nav-icon">🔧</span>
             Services
           </button>
+          <button class="nav-item" data-route="/alerts" id="nav-alerts-btn">
+            <span class="nav-icon">⚠️</span>
+            Alerts
+            <span class="badge badge-overdue alert-badge" id="nav-alert-badge" style="display:none; margin-left:auto; font-size:11px; padding: 2px 7px;">0</span>
+          </button>
 
           <span class="nav-section-label" style="margin-top: auto;">Account</span>
           <button class="nav-item" id="logout-btn">
@@ -97,7 +102,20 @@ export function updateActiveNav(): void {
       '/dashboard': 'Dashboard',
       '/vehicles': 'Vehicles',
       '/services': 'Services',
+      '/alerts': 'Overdue Alerts',
     };
     headerTitle.textContent = titles[active] ?? 'FleetPro';
+  }
+}
+
+export function updateAlertBadge(count: number): void {
+  const badge = document.getElementById('nav-alert-badge');
+  if (badge) {
+    if (count > 0) {
+      badge.textContent = String(count);
+      badge.style.display = 'inline-block';
+    } else {
+      badge.style.display = 'none';
+    }
   }
 }

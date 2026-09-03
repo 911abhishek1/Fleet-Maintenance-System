@@ -6,6 +6,7 @@ import { renderLoginPage } from './pages/login';
 import { renderDashboardPage } from './pages/dashboard';
 import { renderVehiclesPage } from './pages/vehicles';
 import { renderServicesPage } from './pages/services';
+import { renderAlertsPage } from './pages/alerts';
 
 // Track whether layout is rendered
 let layoutRendered = false;
@@ -59,6 +60,16 @@ registerRoute({
     ensureLayout();
     const pageContent = document.getElementById('page-content')!;
     await renderServicesPage(pageContent);
+  },
+});
+
+registerRoute({
+  path: '/alerts',
+  guard: () => isLoggedIn(),
+  render: async (_container) => {
+    ensureLayout();
+    const pageContent = document.getElementById('page-content')!;
+    await renderAlertsPage(pageContent);
   },
 });
 

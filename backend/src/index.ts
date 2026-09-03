@@ -6,6 +6,7 @@ import cookieParser from 'cookie-parser';
 import authRoutes from './routes/auth';
 import vehicleRoutes from './routes/vehicles';
 import serviceRoutes from './routes/services';
+import alertRoutes from './routes/alerts';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -21,6 +22,7 @@ app.use(cookieParser());
 app.use('/api/auth', authRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/services', serviceRoutes);
+app.use('/api/alerts', alertRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {

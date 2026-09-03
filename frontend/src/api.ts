@@ -130,4 +130,11 @@ export const serviceAPI = {
     api.get('/services/export-csv', { responseType: 'blob' }),
 };
 
+// --- Alerts ---
+export const alertAPI = {
+  list: () => api.get('/alerts'),
+  dismiss: (serviceRecordId: string) =>
+    api.post(`/alerts/${serviceRecordId}/dismiss`),
+};
+
 export default api;
