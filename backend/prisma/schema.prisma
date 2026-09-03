@@ -13,48 +13,54 @@ enum Role {
 
 enum ServiceStatus {
   DUE
-  OVERDUE
   BOOKED
   IN_SERVICE
   COMPLETED
 }
 
 model User {
-  id            String   @id @default(uuid())
-  email         String   @unique
-  passwordHash  String
-  role          Role
-  assignments   TechnicianAssignment[]
-  auditLogs     AuditLog[]
+  id           String                 @id @default(uuid())
+  email        String                 @unique
+  passwordHash String
+  role         Role
+  assignments  TechnicianAssignment[]
+  auditLogs    AuditLog[]
 }
 
 model Vehicle {
-  id               String   @id @default(uuid())
-  registration     String   @unique
-  make             String
-  model            String
-  odometer         Int
-  dateIntervalDays Int
-  mileageInterval  Int
-  archived         Boolean  @default(false)
-  serviceRecords   ServiceRecord[]
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                  String          @id @default(uuid())
+  registration        String          @unique
+  make                String
+  model               String
+  odometer            Int
+  dateIntervalDays    Int
+  mileageInterval     Int
+  lastServiceDate     DateTime        @default(now())
+  lastServiceMileage  Int             @default(0)
+  serviceCycle        Int             @default(1)
+  dismissedAlertCycle Int             @default(0)
+  archived            Boolean         @default(false)
+  serviceRecords      ServiceRecord[]
+  auditLogs           AuditLog[]
+  createdAt           DateTime        @default(now())
+  updatedAt           DateTime        @updatedAt
 }
 
 model ServiceRecord {
-  id                String   @id @default(uuid())
+  id                String                 @id @default(uuid())
   vehicleId         String
-  vehicle           Vehicle  @relation(fields: [vehicleId], references: [id])
+  vehicle           Vehicle                @relation(fields: [vehicleId], references: [id])
+  cycle             Int                    @default(1)
   description       String
-  status            ServiceStatus @default(DUE)
+  status            ServiceStatus          @default(DUE)
+  dueDate           DateTime?
   dateScheduled     DateTime?
   dateCompleted     DateTime?
   completedOdometer Int?
   assignments       TechnicianAssignment[]
   auditLogs         AuditLog[]
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdAt         DateTime               @default(now())
+  updatedAt         DateTime               @updatedAt
 }
 
 model TechnicianAssignment {
@@ -67,14 +73,17 @@ model TechnicianAssignment {
 }
 
 model AuditLog {
-  id              String   @id @default(uuid())
-  serviceRecordId String
-  serviceRecord   ServiceRecord @relation(fields: [serviceRecordId], references: [id])
+  id              String         @id @default(uuid())
+  vehicleId       String?
+  vehicle         Vehicle?       @relation(fields: [vehicleId], references: [id])
+  serviceRecordId String?
+  serviceRecord   ServiceRecord? @relation(fields: [serviceRecordId], references: [id])
   changedById     String?
-  changedBy       User?    @relation(fields: [changedById], references: [id])
+  changedBy       User?          @relation(fields: [changedById], references: [id])
+  action          String         @default("UPDATE")
   field           String
   oldValue        String?
   newValue        String?
   notes           String?
-  createdAt       DateTime @default(now())
+  createdAt       DateTime       @default(now())
 }
