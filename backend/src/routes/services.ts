@@ -1,6 +1,9 @@
 import { Router, Response } from 'express';
 import { requireAuth, requireFleetManager, requireTechnician, AuthRequest } from '../middleware/auth';
 import prisma from '../db';
+import { updateServiceRecord } from '../services/serviceLifecycle';
+import { ValidationError, InvalidTransitionError, ForbiddenActionError } from '../domain/lifecycle';
+import { logAuditEvent } from '../domain/audit';
 
 const router = Router();
 router.use(requireAuth);
@@ -106,111 +109,94 @@ router.get('/export-csv', requireFleetManager, async (req: AuthRequest, res: Res
 });
 
 // POST /api/services - Create service record (Fleet Manager only)
+// Always initializes status to DUE and sets dueDate to creation time (due now).
 router.post('/', requireFleetManager, async (req: AuthRequest, res: Response): Promise<void> => {
-  const { vehicleId, description, status } = req.body;
+  const { vehicleId, description } = req.body;
 
   try {
-    const record = await prisma.serviceRecord.create({
-      data: {
-        vehicleId,
-        description,
-        status: status || 'DUE'
-      }
+    const vehicle = await prisma.vehicle.findUnique({
+      where: { id: vehicleId },
     });
+
+    if (!vehicle) {
+      res.status(404).json({ error: 'Vehicle not found' });
+      return;
+    }
+
+    const creationTime = new Date();
+
+    // Atomically create service record and SERVICE_CREATED audit log
+    const record = await prisma.$transaction(async (tx) => {
+      const created = await tx.serviceRecord.create({
+        data: {
+          vehicleId,
+          description: description || 'Routine maintenance',
+          status: 'DUE', // Always DUE; client cannot override initial status
+          cycle: vehicle.serviceCycle,
+          dueDate: creationTime, // Manually created DUE service represents work that is due now
+        },
+        include: {
+          vehicle: true,
+          assignments: { include: { user: { select: { id: true, email: true, role: true } } } },
+        },
+      });
+
+      await logAuditEvent(tx, {
+        serviceRecordId: created.id,
+        vehicleId: vehicle.id,
+        changedById: req.user?.id,
+        action: 'SERVICE_CREATED',
+        field: 'status',
+        oldValue: null,
+        newValue: 'DUE',
+        notes: created.description,
+      });
+
+      return created;
+    });
+
     res.status(201).json(record);
   } catch (error) {
+    console.error('Create service error:', error);
     res.status(400).json({ error: 'Failed to create service record' });
   }
 });
 
-// PUT /api/services/:id - Update service record
+// PUT /api/services/:id - Update service record / transition lifecycle
 router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
-  const { id } = req.params;
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const { description, status, dateScheduled, completedOdometer } = req.body;
-  const userRole = req.user?.role;
-  const userId = req.user?.id;
+  const caller = req.user;
+
+  if (!caller) {
+    res.status(401).json({ error: 'Unauthorized' });
+    return;
+  }
 
   try {
-    const existingRecord = await prisma.serviceRecord.findUnique({
-      where: { id },
-      include: { assignments: true, vehicle: true }
-    });
-
-    if (!existingRecord) {
-      res.status(404).json({ error: 'Service record not found' });
+    const result = await updateServiceRecord(
+      id,
+      { id: caller.id, role: caller.role as 'FLEET_MANAGER' | 'TECHNICIAN' },
+      { description, status, dateScheduled, completedOdometer }
+    );
+    res.json(result.service);
+  } catch (error: any) {
+    if (error instanceof ValidationError || error instanceof InvalidTransitionError) {
+      res.status(400).json({ error: error.message });
       return;
     }
-
-    if (userRole === 'TECHNICIAN') {
-      const isAssigned = existingRecord.assignments.some(a => a.userId === userId);
-      if (!isAssigned) {
-        res.status(403).json({ error: 'Forbidden: You are not assigned to this service record' });
-        return;
-      }
-      
-      const updatedRecord = await prisma.serviceRecord.update({
-        where: { id },
-        data: { description }
-      });
-      res.json(updatedRecord);
+    if (error instanceof ForbiddenActionError) {
+      res.status(403).json({ error: error.message });
       return;
     }
-
-    // --- Fleet Manager Logic ---
-
-    // State Machine Validation
-    if (status && status !== existingRecord.status) {
-      const validTransitions: Record<string, string[]> = {
-        'DUE': ['BOOKED', 'OVERDUE'],
-        'OVERDUE': ['BOOKED'],
-        'BOOKED': ['IN_SERVICE'],
-        'IN_SERVICE': ['COMPLETED']
-      };
-      
-      const allowed = validTransitions[existingRecord.status] || [];
-      if (!allowed.includes(status)) {
-        res.status(400).json({ error: `Invalid transition from ${existingRecord.status} to ${status}` });
-        return;
-      }
-    }
-
-    const updateData: any = { description };
-    if (status) updateData.status = status;
-    if (dateScheduled) updateData.dateScheduled = new Date(dateScheduled);
-
-    if (status === 'COMPLETED' && existingRecord.status !== 'COMPLETED') {
-      if (!completedOdometer) {
-        res.status(400).json({ error: 'completedOdometer is required when completing a service' });
-        return;
-      }
-      updateData.completedOdometer = parseInt(completedOdometer);
-      updateData.dateCompleted = new Date();
-
-      // Reset counters on vehicle
-      await prisma.vehicle.update({
-        where: { id: existingRecord.vehicleId },
-        data: {
-          odometer: parseInt(completedOdometer)
-          // The "reset" of intervals means the next DUE date/mileage is calculated from THIS completed date/odometer.
-          // Since our schema only stores the intervals and current odometer, we might need a background job or calculation to determine next due.
-          // By updating odometer here, we effectively reset the mileage counter.
-        }
-      });
-    }
-
-    const updatedRecord = await prisma.serviceRecord.update({
-      where: { id },
-      data: updateData
-    });
-    res.json(updatedRecord);
-  } catch (error) {
-    res.status(400).json({ error: 'Failed to update service record' });
+    console.error('Update service record error:', error);
+    res.status(500).json({ error: 'Failed to update service record' });
   }
 });
 
-// POST /api/services/:id/assignments - Add technician (Fleet Manager)
+// POST /api/services/:id/assignments - Add technician (Fleet Manager only, atomic with audit log)
 router.post('/:id/assignments', requireFleetManager, async (req: AuthRequest, res: Response): Promise<void> => {
-  const { id } = req.params;
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const input = ((req.body.technicianId || req.body.email || '') as string).trim();
 
   if (!input) {
@@ -219,83 +205,154 @@ router.post('/:id/assignments', requireFleetManager, async (req: AuthRequest, re
   }
 
   try {
-    // 1. Verify service record exists
-    const serviceRecord = await prisma.serviceRecord.findUnique({
-      where: { id },
-    });
-    if (!serviceRecord) {
-      res.status(404).json({ error: 'Service record not found' });
-      return;
-    }
-
-    // 2. Resolve target user (by email or ID)
-    const targetUser = input.includes('@')
-      ? await prisma.user.findUnique({ where: { email: input } })
-      : await prisma.user.findUnique({ where: { id: input } });
-
-    if (!targetUser) {
-      res.status(404).json({
-        error: input.includes('@')
-          ? `No technician found with email "${input}". Make sure they have registered.`
-          : `No technician found with ID "${input}".`,
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Verify service record exists
+      const serviceRecord = await tx.serviceRecord.findUnique({
+        where: { id },
       });
-      return;
-    }
+      if (!serviceRecord) {
+        return { error: 'Service record not found', status: 404 };
+      }
 
-    // 3. Verify user has role TECHNICIAN (reject Fleet Managers)
-    if (targetUser.role !== 'TECHNICIAN') {
-      res.status(400).json({
-        error: `Cannot assign user with role "${targetUser.role}". Only users with role "TECHNICIAN" can be assigned to services.`,
+      // 2. Resolve target user (by email or ID)
+      const targetUser = input.includes('@')
+        ? await tx.user.findUnique({ where: { email: input } })
+        : await tx.user.findUnique({ where: { id: input } });
+
+      if (!targetUser) {
+        return {
+          error: input.includes('@')
+            ? `No technician found with email "${input}". Make sure they have registered.`
+            : `No technician found with ID "${input}".`,
+          status: 404,
+        };
+      }
+
+      // 3. Verify user has role TECHNICIAN (reject Fleet Managers)
+      if (targetUser.role !== 'TECHNICIAN') {
+        return {
+          error: `Cannot assign user with role "${targetUser.role}". Only users with role "TECHNICIAN" can be assigned to services.`,
+          status: 400,
+        };
+      }
+
+      // 4. Check if technician is already assigned
+      const existing = await tx.technicianAssignment.findUnique({
+        where: {
+          serviceRecordId_userId: {
+            serviceRecordId: id,
+            userId: targetUser.id,
+          },
+        },
       });
-      return;
-    }
 
-    // 4. Check if technician is already assigned
-    const existing = await prisma.technicianAssignment.findUnique({
-      where: {
-        serviceRecordId_userId: {
+      if (existing) {
+        return { error: 'This technician is already assigned to this service', status: 400 };
+      }
+
+      // 5. Create assignment
+      const assignment = await tx.technicianAssignment.create({
+        data: {
           serviceRecordId: id,
           userId: targetUser.id,
         },
-      },
+        include: {
+          user: { select: { id: true, email: true, role: true } },
+        },
+      });
+
+      // 6. Create audit event atomically
+      await logAuditEvent(tx, {
+        action: 'TECHNICIAN_ASSIGNED',
+        serviceRecordId: id,
+        vehicleId: serviceRecord.vehicleId,
+        changedById: req.user?.id,
+        field: 'technicianId',
+        oldValue: null,
+        newValue: targetUser.id,
+        notes: `Assigned technician ${targetUser.email} (${targetUser.id})`,
+      });
+
+      return { assignment, status: 201 };
     });
 
-    if (existing) {
-      res.status(400).json({ error: 'This technician is already assigned to this service' });
+    if (result.error) {
+      res.status(result.status).json({ error: result.error });
       return;
     }
 
-    // 5. Create assignment
-    const assignment = await prisma.technicianAssignment.create({
-      data: {
-        serviceRecordId: id,
-        userId: targetUser.id,
-      },
-      include: {
-        user: { select: { id: true, email: true, role: true } },
-      },
-    });
-    res.status(201).json(assignment);
+    res.status(201).json(result.assignment);
   } catch (error) {
     console.error('Assign technician error:', error);
     res.status(500).json({ error: 'Failed to assign technician' });
   }
 });
 
-// DELETE /api/services/:id/assignments/:technicianId - Remove technician
+// DELETE /api/services/:id/assignments/:technicianId - Remove technician (Fleet Manager only, atomic with audit log)
 router.delete('/:id/assignments/:technicianId', requireFleetManager, async (req: AuthRequest, res: Response): Promise<void> => {
-  const { id, technicianId } = req.params;
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const technicianId = Array.isArray(req.params.technicianId) ? req.params.technicianId[0] : req.params.technicianId;
+
   try {
-    await prisma.technicianAssignment.delete({
-      where: {
-        serviceRecordId_userId: {
-          serviceRecordId: id,
-          userId: technicianId
-        }
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Verify service record exists
+      const serviceRecord = await tx.serviceRecord.findUnique({
+        where: { id },
+      });
+      if (!serviceRecord) {
+        return { error: 'Service record not found', status: 404 };
       }
+
+      // 2. Check assignment exists
+      const existing = await tx.technicianAssignment.findUnique({
+        where: {
+          serviceRecordId_userId: {
+            serviceRecordId: id,
+            userId: technicianId,
+          },
+        },
+        include: {
+          user: { select: { id: true, email: true, role: true } },
+        },
+      });
+
+      if (!existing) {
+        return { error: 'Technician assignment not found', status: 404 };
+      }
+
+      // 3. Delete assignment
+      await tx.technicianAssignment.delete({
+        where: {
+          serviceRecordId_userId: {
+            serviceRecordId: id,
+            userId: technicianId,
+          },
+        },
+      });
+
+      // 4. Create audit event atomically
+      await logAuditEvent(tx, {
+        action: 'TECHNICIAN_UNASSIGNED',
+        serviceRecordId: id,
+        vehicleId: serviceRecord.vehicleId,
+        changedById: req.user?.id,
+        field: 'technicianId',
+        oldValue: technicianId,
+        newValue: null,
+        notes: `Removed technician ${existing.user.email} (${existing.user.id})`,
+      });
+
+      return { status: 200 };
     });
+
+    if (result.error) {
+      res.status(result.status).json({ error: result.error });
+      return;
+    }
+
     res.json({ message: 'Assignment removed' });
   } catch (error) {
+    console.error('Remove assignment error:', error);
     res.status(400).json({ error: 'Failed to remove assignment' });
   }
 });

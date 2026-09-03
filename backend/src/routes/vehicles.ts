@@ -1,6 +1,8 @@
 import { Router, Response } from 'express';
 import { requireAuth, requireFleetManager, AuthRequest } from '../middleware/auth';
 import prisma from '../db';
+import { evaluateServiceDue } from '../domain/maintenance';
+import { logAuditEvent } from '../domain/audit';
 
 const router = Router();
 
@@ -21,78 +23,66 @@ router.get('/', async (req: AuthRequest, res: Response) => {
   }
 });
 
-// POST /api/vehicles/evaluate-status - Auto-flag DUE and OVERDUE
-// Typically called by a background cron job
+// POST /api/vehicles/evaluate-status - Auto-flag DUE maintenance based on pure domain rules
 router.post('/evaluate-status', requireFleetManager, async (req: AuthRequest, res: Response) => {
-  const { gracePeriodDays = 7 } = req.body;
-  
   try {
     const vehicles = await prisma.vehicle.findMany({
       include: {
-        serviceRecords: {
-          orderBy: { createdAt: 'desc' }
-        }
-      }
+        serviceRecords: true,
+      },
     });
 
     const now = new Date();
     let flaggedDue = 0;
-    let flaggedOverdue = 0;
 
     for (const vehicle of vehicles) {
-      // Find the last completed service to calculate intervals, or the latest active service
-      const lastCompleted = vehicle.serviceRecords.find(r => r.status === 'COMPLETED');
-      const currentActive = vehicle.serviceRecords.find(r => r.status !== 'COMPLETED');
-      
-      // If there's an active service (DUE, OVERDUE, BOOKED, IN_SERVICE), check if we need to mark it OVERDUE
-      if (currentActive && currentActive.status === 'DUE') {
-        const dueDate = currentActive.createdAt; // Assuming it became DUE on creation, or we can use dateScheduled
-        const diffTime = Math.abs(now.getTime() - dueDate.getTime());
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-        
-        if (diffDays > gracePeriodDays) {
-          await prisma.serviceRecord.update({
-            where: { id: currentActive.id },
-            data: { status: 'OVERDUE' }
-          });
-          flaggedOverdue++;
-        }
+      // Check if there is already an active service record for the vehicle
+      const hasActiveService = vehicle.serviceRecords.some((r) => r.status !== 'COMPLETED');
+      if (hasActiveService) {
         continue;
       }
 
-      // If no active service, check if we need to create a new DUE service
-      if (!currentActive) {
-        let isDue = false;
+      // Evaluate whether vehicle is due using pure domain calculation
+      const dueEval = evaluateServiceDue(
+        {
+          odometer: vehicle.odometer,
+          lastServiceDate: vehicle.lastServiceDate,
+          lastServiceMileage: vehicle.lastServiceMileage,
+          dateIntervalDays: vehicle.dateIntervalDays,
+          mileageInterval: vehicle.mileageInterval,
+        },
+        now
+      );
 
-        // Based on mileage
-        const lastOdometer = lastCompleted?.completedOdometer || 0;
-        if (vehicle.odometer - lastOdometer >= vehicle.mileageInterval) {
-          isDue = true;
-        }
+      if (dueEval.isDue) {
+        const newRecord = await prisma.serviceRecord.create({
+          data: {
+            vehicleId: vehicle.id,
+            description: `Scheduled maintenance (due by ${dueEval.trigger})`,
+            status: 'DUE',
+            cycle: vehicle.serviceCycle,
+            dueDate: dueEval.canonicalDueDate,
+          },
+        });
 
-        // Based on date
-        const lastDate = lastCompleted?.dateCompleted || vehicle.createdAt;
-        const diffTimeDate = Math.abs(now.getTime() - lastDate.getTime());
-        const diffDaysDate = Math.ceil(diffTimeDate / (1000 * 60 * 60 * 24));
-        if (diffDaysDate >= vehicle.dateIntervalDays) {
-          isDue = true;
-        }
+        await logAuditEvent(prisma, {
+          serviceRecordId: newRecord.id,
+          vehicleId: vehicle.id,
+          changedById: req.user?.id,
+          action: 'SERVICE_CREATED',
+          field: 'status',
+          oldValue: null,
+          newValue: 'DUE',
+          notes: `Auto-evaluated due maintenance by ${dueEval.trigger}. Canonical dueDate: ${dueEval.canonicalDueDate?.toISOString()}`,
+        });
 
-        if (isDue) {
-          await prisma.serviceRecord.create({
-            data: {
-              vehicleId: vehicle.id,
-              description: 'Auto-flagged regular maintenance',
-              status: 'DUE'
-            }
-          });
-          flaggedDue++;
-        }
+        flaggedDue++;
       }
     }
 
-    res.json({ message: 'Evaluation complete', flaggedDue, flaggedOverdue });
+    res.json({ message: 'Evaluation complete', flaggedDue });
   } catch (error) {
+    console.error('Failed to evaluate status:', error);
     res.status(500).json({ error: 'Failed to evaluate status' });
   }
 });
@@ -158,12 +148,17 @@ router.post('/', requireFleetManager, async (req: AuthRequest, res: Response) =>
   const { registration, make, model, odometer, dateIntervalDays, mileageInterval } = req.body;
   
   try {
+    const initialOdometer = parseInt(odometer);
     const vehicle = await prisma.vehicle.create({
       data: {
         registration,
         make,
         model,
-        odometer: parseInt(odometer),
+        odometer: initialOdometer,
+        lastServiceMileage: initialOdometer,
+        lastServiceDate: new Date(),
+        serviceCycle: 1,
+        dismissedAlertCycle: 0,
         dateIntervalDays: parseInt(dateIntervalDays),
         mileageInterval: parseInt(mileageInterval),
       }
@@ -176,7 +171,7 @@ router.post('/', requireFleetManager, async (req: AuthRequest, res: Response) =>
 
 // PUT /api/vehicles/:id - Update a vehicle (Fleet Manager only)
 router.put('/:id', requireFleetManager, async (req: AuthRequest, res: Response) => {
-  const { id } = req.params;
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const { registration, make, model, odometer, dateIntervalDays, mileageInterval } = req.body;
 
   try {
@@ -199,7 +194,7 @@ router.put('/:id', requireFleetManager, async (req: AuthRequest, res: Response) 
 
 // PATCH /api/vehicles/:id/archive - Archive/Restore a vehicle (Fleet Manager only)
 router.patch('/:id/archive', requireFleetManager, async (req: AuthRequest, res: Response) => {
-  const { id } = req.params;
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
   const { archived } = req.body;
 
   try {
