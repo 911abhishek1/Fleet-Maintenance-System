@@ -137,4 +137,9 @@ export const alertAPI = {
     api.post(`/alerts/${serviceRecordId}/dismiss`),
 };
 
+// --- Dashboard ---
+export const dashboardAPI = {
+  get: () => api.get('/dashboard'),
+};
+
 export default api;

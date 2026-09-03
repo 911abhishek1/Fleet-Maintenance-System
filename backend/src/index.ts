@@ -7,6 +7,7 @@ import authRoutes from './routes/auth';
 import vehicleRoutes from './routes/vehicles';
 import serviceRoutes from './routes/services';
 import alertRoutes from './routes/alerts';
+import dashboardRoutes from './routes/dashboard';
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -23,6 +24,7 @@ app.use('/api/auth', authRoutes);
 app.use('/api/vehicles', vehicleRoutes);
 app.use('/api/services', serviceRoutes);
 app.use('/api/alerts', alertRoutes);
+app.use('/api/dashboard', dashboardRoutes);
 
 // Health check
 app.get('/api/health', (req, res) => {
