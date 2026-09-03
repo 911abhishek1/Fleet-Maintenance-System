@@ -84,8 +84,13 @@ export const vehicleAPI = {
   archive: (id: string, archived: boolean) =>
     api.patch(`/vehicles/${id}/archive`, { archived }),
 
-  bulkOdometer: (csv: string) =>
-    api.post('/vehicles/bulk-odometer', { csv }),
+  bulkOdometer: (payload: FormData | { csv: string } | string) => {
+    if (payload instanceof FormData) {
+      return api.post('/vehicles/bulk-odometer', payload);
+    }
+    const body = typeof payload === 'string' ? { csv: payload } : payload;
+    return api.post('/vehicles/bulk-odometer', body);
+  },
 
   evaluateStatus: (gracePeriodDays?: number) =>
     api.post('/vehicles/evaluate-status', { gracePeriodDays }),

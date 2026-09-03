@@ -352,49 +352,114 @@ function showEditVehicleModal(vehicle: Vehicle, pageContainer: HTMLElement): voi
 function showBulkUploadModal(pageContainer: HTMLElement): void {
   openModal('Bulk Odometer Update', `
     <p style="color: var(--text-secondary); font-size: var(--font-sm); margin-bottom: var(--space-4);">
-      Paste CSV data with <code>registration,odometer</code> format. One entry per line.
+      Upload a CSV file or paste CSV data with <code>registration,odometer</code> columns.
     </p>
-    <div class="form-group">
-      <label class="form-label" for="csv-data">CSV Data</label>
-      <textarea id="csv-data" class="form-textarea" rows="8" placeholder="registration,odometer&#10;ABC-1234,55000&#10;XYZ-5678,62000"></textarea>
+    <div class="form-group" style="margin-bottom: var(--space-3);">
+      <label class="form-label" for="csv-file">Choose CSV File</label>
+      <input type="file" id="csv-file" accept=".csv,text/csv" class="form-input" style="padding: 6px;" />
     </div>
-    <div id="bulk-results" style="display:none;"></div>
+    <div class="form-group">
+      <label class="form-label" for="csv-data">Or Paste CSV Data</label>
+      <textarea id="csv-data" class="form-textarea" rows="4" placeholder="registration,odometer&#10;ABC-1234,55000&#10;XYZ-5678,62000"></textarea>
+    </div>
+    <div id="bulk-results" style="display:none; max-height: 250px; overflow-y: auto; margin-top: var(--space-3);"></div>
   `, `
     <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
-    <button class="btn btn-primary" id="modal-submit">Upload</button>
+    <button class="btn btn-primary" id="modal-submit">Upload CSV</button>
   `);
 
-  document.getElementById('modal-cancel')!.addEventListener('click', closeModal);
-  document.getElementById('modal-submit')!.addEventListener('click', async () => {
-    const csv = (document.getElementById('csv-data') as HTMLTextAreaElement).value.trim();
-    if (!csv) {
-      toastError('Validation', 'Please enter CSV data.');
+  document.getElementById('modal-cancel')?.addEventListener('click', closeModal);
+  const submitBtn = document.getElementById('modal-submit') as HTMLButtonElement | null;
+
+  submitBtn?.addEventListener('click', async () => {
+    const fileInput = document.getElementById('csv-file') as HTMLInputElement | null;
+    const file = fileInput?.files?.[0];
+    const textData = (document.getElementById('csv-data') as HTMLTextAreaElement | null)?.value.trim();
+
+    if (!file && !textData) {
+      toastError('Validation', 'Please select a CSV file or enter CSV data.');
       return;
     }
 
-    try {
-      const res = await vehicleAPI.bulkOdometer(csv);
-      const report = res.data.report as Array<{ registration: string; success: boolean; reason?: string }>;
-      const successCount = report.filter((r) => r.success).length;
-      const failCount = report.filter((r) => !r.success).length;
+    if (submitBtn) {
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'Uploading...';
+    }
 
-      const resultsEl = document.getElementById('bulk-results')!;
-      resultsEl.style.display = 'block';
-      resultsEl.innerHTML = `
-        <div style="margin-top: var(--space-4); padding: var(--space-4); background: var(--bg-glass); border-radius: var(--radius-md);">
-          <p><strong>${successCount}</strong> updated, <strong>${failCount}</strong> failed</p>
-          ${report.filter((r) => !r.success).map((r) => `
-            <p style="color: var(--error); font-size: var(--font-xs);">${r.registration}: ${r.reason}</p>
-          `).join('')}
-        </div>
-      `;
+    try {
+      let res;
+      if (file) {
+        const formData = new FormData();
+        formData.append('file', file);
+        res = await vehicleAPI.bulkOdometer(formData);
+      } else {
+        res = await vehicleAPI.bulkOdometer(textData!);
+      }
+
+      const report = (res.data?.report || []) as Array<{
+        rowNumber: number;
+        vehicleIdentifier: string;
+        inputOdometer: number | string;
+        status: 'SUCCESS' | 'REJECTED';
+        success: boolean;
+        reason?: string;
+      }>;
+
+      const successCount = report.filter((r) => r.status === 'SUCCESS' || r.success).length;
+      const failCount = report.filter((r) => r.status === 'REJECTED' || !r.success).length;
+
+      const resultsEl = document.getElementById('bulk-results');
+      if (resultsEl) {
+        resultsEl.style.display = 'block';
+        resultsEl.innerHTML = `
+          <div style="padding: var(--space-3); background: var(--bg-glass); border-radius: var(--radius-md); border: 1px solid var(--border-color);">
+            <p style="margin-bottom: var(--space-2); font-weight: var(--weight-medium);">
+              <strong>${successCount}</strong> updated, <strong>${failCount}</strong> rejected (${report.length} total rows)
+            </p>
+            <table class="data-table" style="font-size: var(--font-xs); width: 100%;">
+              <thead>
+                <tr>
+                  <th>Row</th>
+                  <th>Vehicle</th>
+                  <th>Input</th>
+                  <th>Status</th>
+                  <th>Details</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${report.map((r) => `
+                  <tr>
+                    <td>${r.rowNumber}</td>
+                    <td><strong>${r.vehicleIdentifier}</strong></td>
+                    <td>${r.inputOdometer}</td>
+                    <td>
+                      ${r.status === 'SUCCESS' || r.success
+                        ? '<span class="badge badge-completed">SUCCESS</span>'
+                        : '<span class="badge badge-overdue">REJECTED</span>'}
+                    </td>
+                    <td style="color: ${r.status === 'SUCCESS' || r.success ? 'var(--text-secondary)' : 'var(--error)'};">
+                      ${r.reason || 'Odometer updated successfully'}
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        `;
+      }
 
       if (successCount > 0) {
         toastSuccess('Bulk update', `${successCount} odometers updated.`);
         await renderVehiclesPage(pageContainer);
       }
-    } catch {
-      toastError('Upload failed', 'Could not process bulk update.');
+    } catch (err: any) {
+      const axErr = err as { response?: { data?: { error?: string } } };
+      toastError('Upload failed', axErr.response?.data?.error || 'Could not process bulk update.');
+    } finally {
+      if (submitBtn) {
+        submitBtn.disabled = false;
+        submitBtn.textContent = 'Upload CSV';
+      }
     }
   });
 }

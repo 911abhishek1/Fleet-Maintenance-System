@@ -1,8 +1,15 @@
 import { Router, Response } from 'express';
+import multer from 'multer';
+import { parse } from 'csv-parse/sync';
 import { requireAuth, requireFleetManager, AuthRequest } from '../middleware/auth';
 import prisma from '../db';
 import { evaluateServiceDue } from '../domain/maintenance';
 import { logAuditEvent } from '../domain/audit';
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5 MB limit
+});
 
 const router = Router();
 
@@ -173,56 +180,203 @@ router.post('/evaluate-status', requireFleetManager, async (req: AuthRequest, re
   }
 });
 
-// POST /api/vehicles/bulk-odometer - Bulk update odometers from CSV text
-// Expects JSON { csv: "registration,odometer\nABC-123,50000\n..." }
-router.post('/bulk-odometer', requireFleetManager, async (req: AuthRequest, res: Response) => {
-  const { csv } = req.body;
-  if (!csv || typeof csv !== 'string') {
-    res.status(400).json({ error: 'Missing or invalid csv string in body' });
+// POST /api/vehicles/bulk-odometer - Bulk update odometers from uploaded CSV file (Fleet Manager only)
+router.post('/bulk-odometer', requireFleetManager, upload.single('file'), async (req: AuthRequest, res: Response): Promise<void> => {
+  let csvContent = '';
+  if (req.file) {
+    csvContent = req.file.buffer.toString('utf-8');
+  } else if (req.body && typeof req.body.csv === 'string') {
+    csvContent = req.body.csv;
+  }
+
+  if (!csvContent || !csvContent.trim()) {
+    res.status(400).json({ error: 'No CSV file or content provided' });
     return;
   }
 
-  const lines = csv.split('\n').map(l => l.trim()).filter(l => l.length > 0);
-  // Assuming header is first line, skip it if it contains "registration"
-  if (lines.length > 0 && lines[0].toLowerCase().includes('registration')) {
-    lines.shift();
+  let records: string[][];
+  try {
+    records = parse(csvContent, {
+      skip_empty_lines: true,
+      trim: true,
+      relax_column_count: true,
+    });
+  } catch (parseErr: any) {
+    res.status(400).json({ error: `Malformed CSV content: ${parseErr.message || 'Parse error'}` });
+    return;
   }
 
-  const report = [];
+  if (records.length === 0) {
+    res.json({ report: [] });
+    return;
+  }
 
-  for (const line of lines) {
-    const [registration, odometerStr] = line.split(',');
-    if (!registration || !odometerStr) {
-      report.push({ registration: registration || 'Unknown', success: false, reason: 'Invalid format' });
-      continue;
-    }
+  // Detect header row
+  let startIndex = 0;
+  const firstRow = records[0];
+  const col0 = (firstRow[0] || '').toLowerCase().trim();
+  const col1 = (firstRow[1] || '').toLowerCase().trim();
+  if (
+    col0.includes('reg') ||
+    col0.includes('veh') ||
+    col0.includes('identifier') ||
+    col0.includes('id') ||
+    col1.includes('odo') ||
+    col1.includes('reading') ||
+    col1.includes('mileage')
+  ) {
+    startIndex = 1;
+  }
 
-    const newOdometer = parseInt(odometerStr);
-    if (isNaN(newOdometer)) {
-      report.push({ registration, success: false, reason: 'Invalid odometer value' });
-      continue;
-    }
+  const report: Array<{
+    rowNumber: number;
+    vehicleIdentifier: string;
+    inputOdometer: number | string;
+    status: 'SUCCESS' | 'REJECTED';
+    success: boolean;
+    reason: string | null;
+  }> = [];
 
-    try {
-      const vehicle = await prisma.vehicle.findUnique({ where: { registration } });
-      if (!vehicle) {
-        report.push({ registration, success: false, reason: 'Vehicle not found' });
-        continue;
-      }
+  // In-memory tracker for sequential duplicate rows within this file
+  const inMemoryOdometerMap = new Map<string, number>();
 
-      if (newOdometer < vehicle.odometer) {
-        report.push({ registration, success: false, reason: 'New reading is less than last recorded' });
-        continue;
-      }
+  for (let i = startIndex; i < records.length; i++) {
+    const rowNumber = i + 1; // 1-indexed file row
+    const row = records[i];
 
-      await prisma.vehicle.update({
-        where: { registration },
-        data: { odometer: newOdometer }
+    // 1. Validate row structure
+    if (!row || row.length < 2) {
+      report.push({
+        rowNumber,
+        vehicleIdentifier: row?.[0] || 'Unknown',
+        inputOdometer: row?.[1] ?? '',
+        status: 'REJECTED',
+        success: false,
+        reason: 'Malformed row: expected at least 2 columns (vehicle identifier, odometer)',
       });
-      report.push({ registration, success: true });
-    } catch (error) {
-      console.error('Bulk update error:', error);
-      report.push({ registration, success: false, reason: 'Database error' });
+      continue;
+    }
+
+    const vehicleIdentifier = (row[0] || '').trim();
+    const odometerRaw = (row[1] || '').trim();
+
+    if (!vehicleIdentifier) {
+      report.push({
+        rowNumber,
+        vehicleIdentifier: '',
+        inputOdometer: odometerRaw,
+        status: 'REJECTED',
+        success: false,
+        reason: 'Vehicle identifier is required',
+      });
+      continue;
+    }
+
+    // 2. Validate odometer value
+    const num = Number(odometerRaw);
+    if (odometerRaw === '' || isNaN(num) || !Number.isInteger(num) || num < 0) {
+      report.push({
+        rowNumber,
+        vehicleIdentifier,
+        inputOdometer: odometerRaw,
+        status: 'REJECTED',
+        success: false,
+        reason: 'Invalid odometer: must be a non-negative integer',
+      });
+      continue;
+    }
+
+    // 3. Identify vehicle
+    try {
+      const vehicle = await prisma.vehicle.findFirst({
+        where: {
+          OR: [
+            { registration: vehicleIdentifier },
+            { id: vehicleIdentifier },
+          ],
+        },
+      });
+
+      if (!vehicle) {
+        report.push({
+          rowNumber,
+          vehicleIdentifier,
+          inputOdometer: num,
+          status: 'REJECTED',
+          success: false,
+          reason: 'Vehicle not found',
+        });
+        continue;
+      }
+
+      // 4. Sequential duplicate row check against in-file latest value
+      const latestTracked = inMemoryOdometerMap.get(vehicle.id) ?? vehicle.odometer;
+      if (num < latestTracked) {
+        report.push({
+          rowNumber,
+          vehicleIdentifier,
+          inputOdometer: num,
+          status: 'REJECTED',
+          success: false,
+          reason: `New reading (${num}) is lower than previous recorded reading (${latestTracked})`,
+        });
+        continue;
+      }
+
+      // 5. Atomic per-row update with database re-read concurrency check and audit logging
+      let currentDbOdometer = vehicle.odometer;
+      await prisma.$transaction(async (tx) => {
+        const freshVehicle = await tx.vehicle.findUnique({
+          where: { id: vehicle.id },
+          select: { id: true, odometer: true },
+        });
+
+        if (!freshVehicle) {
+          throw new Error('Vehicle not found during transaction');
+        }
+
+        if (num < freshVehicle.odometer) {
+          throw new Error(`Concurrent update: database odometer (${freshVehicle.odometer}) is higher than new reading (${num})`);
+        }
+
+        currentDbOdometer = freshVehicle.odometer;
+
+        await tx.vehicle.update({
+          where: { id: vehicle.id },
+          data: { odometer: num },
+        });
+
+        await logAuditEvent(tx, {
+          vehicleId: vehicle.id,
+          changedById: req.user?.id,
+          action: 'ODOMETER_UPDATED',
+          field: 'odometer',
+          oldValue: String(currentDbOdometer),
+          newValue: String(num),
+          notes: `Bulk odometer CSV import: updated from ${currentDbOdometer} to ${num} (row ${rowNumber})`,
+        });
+      });
+
+      // Update in-memory tracker after successful transaction commit
+      inMemoryOdometerMap.set(vehicle.id, num);
+
+      report.push({
+        rowNumber,
+        vehicleIdentifier,
+        inputOdometer: num,
+        status: 'SUCCESS',
+        success: true,
+        reason: null,
+      });
+    } catch (err: any) {
+      report.push({
+        rowNumber,
+        vehicleIdentifier,
+        inputOdometer: num,
+        status: 'REJECTED',
+        success: false,
+        reason: err.message || 'Failed to update vehicle odometer',
+      });
     }
   }
 

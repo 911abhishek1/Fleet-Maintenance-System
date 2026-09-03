@@ -1,4 +1,5 @@
 import { Router, Response } from 'express';
+import { stringify } from 'csv-stringify/sync';
 import { requireAuth, requireFleetManager, requireTechnician, AuthRequest } from '../middleware/auth';
 import prisma from '../db';
 import { updateServiceRecord } from '../services/serviceLifecycle';
@@ -155,32 +156,38 @@ router.get('/search', async (req: AuthRequest, res: Response): Promise<void> => 
   }
 });
 
-// GET /api/services/export-csv - CSV export of service history
-router.get('/export-csv', requireFleetManager, async (req: AuthRequest, res: Response) => {
+// GET /api/services/export-csv - CSV export of service history (Fleet Manager only)
+router.get('/export-csv', requireFleetManager, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
     const records = await prisma.serviceRecord.findMany({
-      include: { vehicle: true, assignments: { include: { user: true } } },
-      orderBy: { createdAt: 'desc' }
+      include: {
+        vehicle: true,
+        assignments: { include: { user: true } },
+      },
+      orderBy: { createdAt: 'desc' },
     });
 
-    const headers = ['ID', 'Vehicle Registration', 'Description', 'Status', 'Date Scheduled', 'Date Completed', 'Completed Odometer', 'Technicians'];
-    const rows = records.map(r => [
+    const rows = records.map((r) => [
       r.id,
-      r.vehicle.registration,
-      `"${r.description.replace(/"/g, '""')}"`,
+      r.vehicle?.registration || '',
+      r.description,
       r.status,
-      r.dateScheduled?.toISOString() || '',
-      r.dateCompleted?.toISOString() || '',
-      r.completedOdometer || '',
-      `"${r.assignments.map(a => a.user.email).join(', ')}"`
+      r.dateScheduled ? r.dateScheduled.toISOString() : '',
+      r.dateCompleted ? r.dateCompleted.toISOString() : '',
+      r.completedOdometer !== null && r.completedOdometer !== undefined ? String(r.completedOdometer) : '',
+      r.assignments.map((a) => a.user.email).join(', '),
     ]);
 
-    const csvContent = [headers.join(','), ...rows.map(r => r.join(','))].join('\n');
-    
+    const csvOutput = stringify([
+      ['Service ID', 'Vehicle Registration', 'Description', 'Status', 'Date Scheduled', 'Date Completed', 'Completed Odometer', 'Technicians'],
+      ...rows,
+    ]);
+
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader('Content-Disposition', 'attachment; filename="service-history.csv"');
-    res.send(csvContent);
+    res.send(csvOutput);
   } catch (error) {
+    console.error('Failed to export CSV:', error);
     res.status(500).json({ error: 'Failed to export CSV' });
   }
 });
