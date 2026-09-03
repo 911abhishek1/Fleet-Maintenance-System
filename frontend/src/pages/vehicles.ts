@@ -14,41 +14,47 @@ interface Vehicle {
   serviceRecords: Array<{ status: string }>;
 }
 
+let currentPage = 1;
+const PAGE_SIZE = 10;
+let totalVehicles = 0;
 let allVehicles: Vehicle[] = [];
 let searchQuery = '';
 let showArchived = false;
+let sortBy = 'createdAt';
+let sortOrder = 'desc';
 
 export async function renderVehiclesPage(container: HTMLElement): Promise<void> {
   container.innerHTML = `<div class="loading-overlay"><div class="spinner"></div></div>`;
+  await loadAndRenderVehicles(container);
+}
 
+async function loadAndRenderVehicles(container: HTMLElement): Promise<void> {
   try {
-    const res = await vehicleAPI.list();
-    allVehicles = res.data;
+    const params: Record<string, unknown> = {
+      page: currentPage,
+      limit: PAGE_SIZE,
+      sortBy,
+      sortOrder,
+    };
+    if (searchQuery.trim()) {
+      params.search = searchQuery.trim();
+    }
+    params.archived = showArchived ? 'all' : 'false';
+
+    const res = await vehicleAPI.list(params);
+    allVehicles = Array.isArray(res.data) ? res.data : (res.data?.vehicles || []);
+    totalVehicles = (res.data as any).total ?? allVehicles.length;
   } catch {
     allVehicles = [];
+    totalVehicles = 0;
     toastError('Load failed', 'Could not load vehicles.');
   }
 
   renderContent(container);
 }
 
-function getFilteredVehicles(): Vehicle[] {
-  return allVehicles.filter((v) => {
-    if (!showArchived && v.archived) return false;
-    if (searchQuery) {
-      const q = searchQuery.toLowerCase();
-      return (
-        v.registration.toLowerCase().includes(q) ||
-        v.make.toLowerCase().includes(q) ||
-        v.model.toLowerCase().includes(q)
-      );
-    }
-    return true;
-  });
-}
-
 function renderContent(container: HTMLElement): void {
-  const filtered = getFilteredVehicles();
+  const totalPages = Math.max(1, Math.ceil(totalVehicles / PAGE_SIZE));
 
   container.innerHTML = `
     <div class="page-title-row">
@@ -59,15 +65,33 @@ function renderContent(container: HTMLElement): void {
       </div>
     </div>
 
-    <div class="filter-bar">
-      <input type="text" class="form-input" id="search-input" placeholder="Search by registration, make, or model…" value="${searchQuery}" />
+    <div class="filter-bar" style="display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center;">
+      <input type="text" class="form-input" id="search-input" placeholder="Search by registration, make, or model…" value="${searchQuery}" style="flex: 1; min-width: 200px;" />
+      
       <label style="display:flex; align-items:center; gap:var(--space-2); color:var(--text-secondary); font-size:var(--font-sm); cursor:pointer;">
         <input type="checkbox" id="show-archived" ${showArchived ? 'checked' : ''} />
         Show Archived
       </label>
+
+      <select class="form-select" id="vehicle-sort-by" style="min-width: 140px;">
+        <option value="createdAt" ${sortBy === 'createdAt' ? 'selected' : ''}>Sort: Created</option>
+        <option value="registration" ${sortBy === 'registration' ? 'selected' : ''}>Sort: Reg</option>
+        <option value="make" ${sortBy === 'make' ? 'selected' : ''}>Sort: Make</option>
+        <option value="model" ${sortBy === 'model' ? 'selected' : ''}>Sort: Model</option>
+        <option value="odometer" ${sortBy === 'odometer' ? 'selected' : ''}>Sort: Odometer</option>
+      </select>
+
+      <select class="form-select" id="vehicle-sort-order" style="min-width: 90px;">
+        <option value="desc" ${sortOrder === 'desc' ? 'selected' : ''}>Desc</option>
+        <option value="asc" ${sortOrder === 'asc' ? 'selected' : ''}>Asc</option>
+      </select>
+
+      <span class="total-count-badge" style="color: var(--text-secondary); font-size: var(--font-sm); margin-left: auto;">
+        ${totalVehicles} vehicles
+      </span>
     </div>
 
-    ${filtered.length === 0 ? `
+    ${allVehicles.length === 0 ? `
       <div class="empty-state">
         <div class="empty-icon">🚗</div>
         <h3>No vehicles found</h3>
@@ -89,8 +113,8 @@ function renderContent(container: HTMLElement): void {
             </tr>
           </thead>
           <tbody>
-            ${filtered.map((v) => {
-              const activeServices = v.serviceRecords.filter((s) => s.status !== 'COMPLETED').length;
+            ${allVehicles.map((v) => {
+              const activeServices = (v.serviceRecords || []).filter((s) => s.status !== 'COMPLETED').length;
               return `
               <tr>
                 <td><strong>${v.registration}</strong></td>
@@ -113,26 +137,67 @@ function renderContent(container: HTMLElement): void {
           </tbody>
         </table>
       </div>
+
+      <div class="pagination">
+        <button ${currentPage <= 1 ? 'disabled' : ''} id="prev-vehicle-page">‹</button>
+        <span class="page-info">Page ${currentPage} of ${totalPages} (${totalVehicles} total)</span>
+        <button ${currentPage >= totalPages ? 'disabled' : ''} id="next-vehicle-page">›</button>
+      </div>
     `}
   `;
 
   // Search
-  document.getElementById('search-input')!.addEventListener('input', (e) => {
-    searchQuery = (e.target as HTMLInputElement).value;
-    renderContent(container);
+  let searchDebounceTimer: any;
+  document.getElementById('search-input')?.addEventListener('input', (e) => {
+    clearTimeout(searchDebounceTimer);
+    searchDebounceTimer = setTimeout(() => {
+      searchQuery = (e.target as HTMLInputElement).value;
+      currentPage = 1;
+      loadAndRenderVehicles(container);
+    }, 300);
   });
 
   // Show archived toggle
-  document.getElementById('show-archived')!.addEventListener('change', (e) => {
+  document.getElementById('show-archived')?.addEventListener('change', (e) => {
     showArchived = (e.target as HTMLInputElement).checked;
-    renderContent(container);
+    currentPage = 1;
+    loadAndRenderVehicles(container);
+  });
+
+  // Sort by
+  document.getElementById('vehicle-sort-by')?.addEventListener('change', (e) => {
+    sortBy = (e.target as HTMLSelectElement).value;
+    currentPage = 1;
+    loadAndRenderVehicles(container);
+  });
+
+  // Sort order
+  document.getElementById('vehicle-sort-order')?.addEventListener('change', (e) => {
+    sortOrder = (e.target as HTMLSelectElement).value;
+    currentPage = 1;
+    loadAndRenderVehicles(container);
+  });
+
+  // Pagination
+  document.getElementById('prev-vehicle-page')?.addEventListener('click', () => {
+    if (currentPage > 1) {
+      currentPage--;
+      loadAndRenderVehicles(container);
+    }
+  });
+
+  document.getElementById('next-vehicle-page')?.addEventListener('click', () => {
+    if (currentPage < totalPages) {
+      currentPage++;
+      loadAndRenderVehicles(container);
+    }
   });
 
   // Add vehicle
-  document.getElementById('add-vehicle-btn')!.addEventListener('click', () => showAddVehicleModal(container));
+  document.getElementById('add-vehicle-btn')?.addEventListener('click', () => showAddVehicleModal(container));
 
   // Bulk upload
-  document.getElementById('bulk-upload-btn')!.addEventListener('click', () => showBulkUploadModal(container));
+  document.getElementById('bulk-upload-btn')?.addEventListener('click', () => showBulkUploadModal(container));
 
   // Edit buttons
   container.querySelectorAll('.edit-vehicle-btn').forEach((btn) => {

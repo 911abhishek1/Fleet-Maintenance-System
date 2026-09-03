@@ -61,6 +61,10 @@ model ServiceRecord {
   auditLogs         AuditLog[]
   createdAt         DateTime               @default(now())
   updatedAt         DateTime               @updatedAt
+
+  @@index([vehicleId, status])
+  @@index([status, updatedAt])
+  @@index([dateScheduled])
 }
 
 model TechnicianAssignment {
@@ -70,6 +74,7 @@ model TechnicianAssignment {
   user            User          @relation(fields: [userId], references: [id])
 
   @@id([serviceRecordId, userId])
+  @@index([userId])
 }
 
 model AuditLog {

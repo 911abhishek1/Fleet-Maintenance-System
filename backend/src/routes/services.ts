@@ -39,26 +39,87 @@ router.get('/', async (req: AuthRequest, res: Response) => {
 });
 
 // GET /api/services/search - Advanced search and pagination
-router.get('/search', async (req: AuthRequest, res: Response) => {
+router.get('/search', async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const { page = '1', limit = '10', description, vehicleId, status, technicianId, sortBy = 'dateScheduled', sortOrder = 'asc' } = req.query;
-    
-    const pageNumber = parseInt(page as string);
-    const limitNumber = parseInt(limit as string);
-    const skip = (pageNumber - 1) * limitNumber;
+    const userRole = req.user?.role;
+    const userId = req.user?.id;
 
+    const {
+      page = '1',
+      limit = '10',
+      description,
+      vehicleId,
+      status,
+      technicianId,
+      sortBy = 'dateScheduled',
+      sortOrder = 'asc',
+    } = req.query;
+
+    // 1. Pagination validation
+    const pageNumber = Number(page);
+    if (!Number.isInteger(pageNumber) || pageNumber < 1) {
+      res.status(400).json({ error: 'Invalid page number. Must be an integer >= 1' });
+      return;
+    }
+
+    const limitNumber = Number(limit);
+    if (!Number.isInteger(limitNumber) || limitNumber < 1 || limitNumber > 100) {
+      res.status(400).json({ error: 'Invalid limit. Must be an integer between 1 and 100' });
+      return;
+    }
+
+    // 2. Sorting validation
+    const allowedSortFields = ['dateScheduled', 'status', 'updatedAt'];
+    const sortFieldStr = String(sortBy);
+    if (!allowedSortFields.includes(sortFieldStr)) {
+      res.status(400).json({
+        error: `Invalid sort field "${sortFieldStr}". Allowed fields: ${allowedSortFields.join(', ')}`,
+      });
+      return;
+    }
+
+    const sortOrderLower = String(sortOrder).toLowerCase();
+    if (!['asc', 'desc'].includes(sortOrderLower)) {
+      res.status(400).json({ error: 'Invalid sort order. Allowed: asc, desc' });
+      return;
+    }
+
+    // 3. Status validation (if provided)
+    if (status && !['DUE', 'BOOKED', 'IN_SERVICE', 'COMPLETED'].includes(String(status))) {
+      res.status(400).json({ error: 'Invalid status filter' });
+      return;
+    }
+
+    // 4. Build filter criteria
     const where: any = {};
-    if (description) where.description = { contains: description as string, mode: 'insensitive' };
-    if (vehicleId) where.vehicleId = vehicleId;
-    if (status) where.status = status;
-    if (technicianId) {
+
+    if (description && String(description).trim()) {
+      where.description = { contains: String(description).trim(), mode: 'insensitive' };
+    }
+
+    if (vehicleId && String(vehicleId).trim()) {
+      where.vehicleId = String(vehicleId).trim();
+    }
+
+    if (status) {
+      where.status = String(status);
+    }
+
+    // Role-based technician scoping:
+    // Technicians are strictly locked to their own assigned records, ignoring any query parameter.
+    if (userRole === 'TECHNICIAN') {
       where.assignments = {
-        some: { userId: technicianId }
+        some: { userId },
+      };
+    } else if (technicianId && String(technicianId).trim()) {
+      where.assignments = {
+        some: { userId: String(technicianId).trim() },
       };
     }
 
+    const skip = (pageNumber - 1) * limitNumber;
     const orderBy = {
-      [sortBy as string]: sortOrder
+      [sortFieldStr]: sortOrderLower as 'asc' | 'desc',
     };
 
     const [records, total] = await Promise.all([
@@ -67,13 +128,29 @@ router.get('/search', async (req: AuthRequest, res: Response) => {
         skip,
         take: limitNumber,
         orderBy,
-        include: { vehicle: true, assignments: { include: { user: true } } }
+        include: {
+          vehicle: true,
+          assignments: {
+            include: {
+              user: { select: { id: true, email: true, role: true } },
+            },
+          },
+        },
       }),
-      prisma.serviceRecord.count({ where })
+      prisma.serviceRecord.count({ where }),
     ]);
 
-    res.json({ records, total, page: pageNumber, limit: limitNumber });
+    const totalPages = Math.ceil(total / limitNumber);
+
+    res.json({
+      records,
+      page: pageNumber,
+      limit: limitNumber,
+      total,
+      totalPages,
+    });
   } catch (error) {
+    console.error('Service search error:', error);
     res.status(500).json({ error: 'Search failed' });
   }
 });

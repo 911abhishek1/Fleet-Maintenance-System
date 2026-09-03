@@ -27,6 +27,13 @@ const PAGE_SIZE = 10;
 let totalRecords = 0;
 let filterStatus = '';
 let filterSearch = '';
+let filterVehicleId = '';
+let filterTechnicianId = '';
+let sortBy = 'dateScheduled';
+let sortOrder = 'asc';
+
+let filterVehiclesList: Vehicle[] = [];
+let filterTechniciansList: Array<{ id: string; email: string }> = [];
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   DUE: 'badge-due',
@@ -58,6 +65,20 @@ function formatDate(dateStr: string | null): string {
 
 export async function renderServicesPage(container: HTMLElement): Promise<void> {
   container.innerHTML = `<div class="loading-overlay"><div class="spinner"></div></div>`;
+
+  if (isFleetManager() && filterVehiclesList.length === 0) {
+    try {
+      const [vRes, tRes] = await Promise.all([
+        vehicleAPI.list({ limit: 100, archived: 'false' }).catch(() => ({ data: [] })),
+        authAPI.getTechnicians().catch(() => ({ data: [] })),
+      ]);
+      filterVehiclesList = Array.isArray(vRes.data) ? vRes.data : (vRes.data?.vehicles || []);
+      filterTechniciansList = Array.isArray(tRes.data) ? tRes.data : [];
+    } catch {
+      // Non-blocking
+    }
+  }
+
   await loadAndRender(container);
 }
 
@@ -66,9 +87,13 @@ async function loadAndRender(container: HTMLElement): Promise<void> {
     const params: Record<string, unknown> = {
       page: currentPage,
       limit: PAGE_SIZE,
+      sortBy,
+      sortOrder,
     };
     if (filterStatus) params.status = filterStatus;
     if (filterSearch) params.description = filterSearch;
+    if (filterVehicleId) params.vehicleId = filterVehicleId;
+    if (filterTechnicianId) params.technicianId = filterTechnicianId;
 
     const res = await serviceAPI.search(params);
     const { records, total } = res.data as { records: ServiceRecord[]; total: number };
@@ -96,7 +121,7 @@ async function loadAndRender(container: HTMLElement): Promise<void> {
 }
 
 function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
-  const totalPages = Math.ceil(totalRecords / PAGE_SIZE);
+  const totalPages = Math.max(1, Math.ceil(totalRecords / PAGE_SIZE));
 
   container.innerHTML = `
     <div class="page-title-row">
@@ -109,23 +134,50 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
       </div>
     </div>
 
-    <div class="filter-bar">
-      <input type="text" class="form-input" id="service-search" placeholder="Search description…" value="${filterSearch}" />
-      <select class="form-select" id="status-filter">
+    <div class="filter-bar" style="display: flex; flex-wrap: wrap; gap: var(--space-2); align-items: center;">
+      <input type="text" class="form-input" id="service-search" placeholder="Search description…" value="${filterSearch}" style="flex: 1; min-width: 180px;" />
+      
+      <select class="form-select" id="vehicle-filter" style="min-width: 150px;">
+        <option value="">All Vehicles</option>
+        ${filterVehiclesList.map((v) => `<option value="${v.id}" ${filterVehicleId === v.id ? 'selected' : ''}>${v.registration} (${v.make})</option>`).join('')}
+      </select>
+
+      <select class="form-select" id="status-filter" style="min-width: 130px;">
         <option value="">All Statuses</option>
         <option value="DUE" ${filterStatus === 'DUE' ? 'selected' : ''}>Due</option>
-        <option value="OVERDUE" ${filterStatus === 'OVERDUE' ? 'selected' : ''}>Overdue</option>
         <option value="BOOKED" ${filterStatus === 'BOOKED' ? 'selected' : ''}>Booked</option>
         <option value="IN_SERVICE" ${filterStatus === 'IN_SERVICE' ? 'selected' : ''}>In Service</option>
         <option value="COMPLETED" ${filterStatus === 'COMPLETED' ? 'selected' : ''}>Completed</option>
       </select>
+
+      ${isFleetManager() ? `
+      <select class="form-select" id="technician-filter" style="min-width: 150px;">
+        <option value="">All Technicians</option>
+        ${filterTechniciansList.map((t) => `<option value="${t.id}" ${filterTechnicianId === t.id ? 'selected' : ''}>${t.email.split('@')[0]}</option>`).join('')}
+      </select>
+      ` : ''}
+
+      <select class="form-select" id="sort-by" style="min-width: 140px;">
+        <option value="dateScheduled" ${sortBy === 'dateScheduled' ? 'selected' : ''}>Sort: Scheduled</option>
+        <option value="status" ${sortBy === 'status' ? 'selected' : ''}>Sort: Status</option>
+        <option value="updatedAt" ${sortBy === 'updatedAt' ? 'selected' : ''}>Sort: Updated</option>
+      </select>
+
+      <select class="form-select" id="sort-order" style="min-width: 90px;">
+        <option value="asc" ${sortOrder === 'asc' ? 'selected' : ''}>Asc</option>
+        <option value="desc" ${sortOrder === 'desc' ? 'selected' : ''}>Desc</option>
+      </select>
+
+      <span class="total-count-badge" style="color: var(--text-secondary); font-size: var(--font-sm); margin-left: auto;">
+        ${totalRecords} records
+      </span>
     </div>
 
     ${records.length === 0 ? `
       <div class="empty-state">
         <div class="empty-icon">🔧</div>
         <h3>No service records</h3>
-        <p>${filterSearch || filterStatus ? 'Try adjusting your filters.' : 'Create a service record to get started.'}</p>
+        <p>${filterSearch || filterStatus || filterVehicleId || filterTechnicianId ? 'Try adjusting your filters.' : 'Create a service record to get started.'}</p>
       </div>
     ` : `
       <div class="table-container">
@@ -166,13 +218,11 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
         </table>
       </div>
 
-      ${totalPages > 1 ? `
       <div class="pagination">
         <button ${currentPage <= 1 ? 'disabled' : ''} id="prev-page">‹</button>
-        <span class="page-info">Page ${currentPage} of ${totalPages}</span>
+        <span class="page-info">Page ${currentPage} of ${totalPages} (${totalRecords} total)</span>
         <button ${currentPage >= totalPages ? 'disabled' : ''} id="next-page">›</button>
       </div>
-      ` : ''}
     `}
   `;
 
@@ -183,8 +233,32 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
     loadAndRender(container);
   }, 300));
 
+  document.getElementById('vehicle-filter')?.addEventListener('change', (e) => {
+    filterVehicleId = (e.target as HTMLSelectElement).value;
+    currentPage = 1;
+    loadAndRender(container);
+  });
+
   document.getElementById('status-filter')?.addEventListener('change', (e) => {
     filterStatus = (e.target as HTMLSelectElement).value;
+    currentPage = 1;
+    loadAndRender(container);
+  });
+
+  document.getElementById('technician-filter')?.addEventListener('change', (e) => {
+    filterTechnicianId = (e.target as HTMLSelectElement).value;
+    currentPage = 1;
+    loadAndRender(container);
+  });
+
+  document.getElementById('sort-by')?.addEventListener('change', (e) => {
+    sortBy = (e.target as HTMLSelectElement).value;
+    currentPage = 1;
+    loadAndRender(container);
+  });
+
+  document.getElementById('sort-order')?.addEventListener('change', (e) => {
+    sortOrder = (e.target as HTMLSelectElement).value;
     currentPage = 1;
     loadAndRender(container);
   });

@@ -9,16 +9,102 @@ const router = Router();
 // Apply auth middleware to all routes
 router.use(requireAuth);
 
-// GET /api/vehicles - List all vehicles
-router.get('/', async (req: AuthRequest, res: Response) => {
+// GET /api/vehicles - List all vehicles with server-side search, filtering, sorting, and pagination (Fleet Manager only)
+router.get('/', requireFleetManager, async (req: AuthRequest, res: Response): Promise<void> => {
   try {
-    const vehicles = await prisma.vehicle.findMany({
-      include: {
-        serviceRecords: true
-      }
+    const {
+      page = '1',
+      limit = '10',
+      search,
+      archived,
+      sortBy = 'createdAt',
+      sortOrder = 'desc',
+    } = req.query;
+
+    // 1. Pagination validation
+    const pageNumber = Number(page);
+    if (!Number.isInteger(pageNumber) || pageNumber < 1) {
+      res.status(400).json({ error: 'Invalid page number. Must be an integer >= 1' });
+      return;
+    }
+
+    const limitNumber = Number(limit);
+    if (!Number.isInteger(limitNumber) || limitNumber < 1 || limitNumber > 100) {
+      res.status(400).json({ error: 'Invalid limit. Must be an integer between 1 and 100' });
+      return;
+    }
+
+    // 2. Sorting validation
+    const allowedSortFields = ['registration', 'make', 'model', 'odometer', 'createdAt', 'updatedAt'];
+    const sortFieldStr = String(sortBy);
+    if (!allowedSortFields.includes(sortFieldStr)) {
+      res.status(400).json({
+        error: `Invalid sort field "${sortFieldStr}". Allowed fields: ${allowedSortFields.join(', ')}`,
+      });
+      return;
+    }
+
+    const sortOrderLower = String(sortOrder).toLowerCase();
+    if (!['asc', 'desc'].includes(sortOrderLower)) {
+      res.status(400).json({ error: 'Invalid sort order. Allowed: asc, desc' });
+      return;
+    }
+
+    // 3. Build filter criteria
+    const where: any = {};
+
+    // Search matches registration, make, or model
+    if (search && String(search).trim()) {
+      const q = String(search).trim();
+      where.OR = [
+        { registration: { contains: q, mode: 'insensitive' } },
+        { make: { contains: q, mode: 'insensitive' } },
+        { model: { contains: q, mode: 'insensitive' } },
+      ];
+    }
+
+    // Archived filter:
+    // Default excludes archived vehicles.
+    // 'true' returns archived vehicles.
+    // 'all' includes both active and archived.
+    if (archived === 'true') {
+      where.archived = true;
+    } else if (archived === 'all') {
+      // no archived restriction
+    } else {
+      where.archived = false;
+    }
+
+    const skip = (pageNumber - 1) * limitNumber;
+    const orderBy = {
+      [sortFieldStr]: sortOrderLower as 'asc' | 'desc',
+    };
+
+    const [vehicles, total] = await Promise.all([
+      prisma.vehicle.findMany({
+        where,
+        skip,
+        take: limitNumber,
+        orderBy,
+        include: {
+          serviceRecords: true,
+        },
+      }),
+      prisma.vehicle.count({ where }),
+    ]);
+
+    const totalPages = Math.ceil(total / limitNumber);
+
+    res.json({
+      vehicles,
+      records: vehicles,
+      page: pageNumber,
+      limit: limitNumber,
+      total,
+      totalPages,
     });
-    res.json(vehicles);
   } catch (error) {
+    console.error('Vehicle listing error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 });

@@ -47,7 +47,27 @@ export const authAPI = {
 
 // --- Vehicles ---
 export const vehicleAPI = {
-  list: () => api.get('/vehicles'),
+  list: async (params?: {
+    page?: number;
+    limit?: number;
+    search?: string;
+    archived?: boolean | string;
+    sortBy?: string;
+    sortOrder?: string;
+  }) => {
+    const res = await api.get('/vehicles', { params });
+    if (res.data && Array.isArray(res.data.vehicles)) {
+      const arr = [...res.data.vehicles] as any;
+      arr.vehicles = res.data.vehicles;
+      arr.records = res.data.records;
+      arr.total = res.data.total;
+      arr.totalPages = res.data.totalPages;
+      arr.page = res.data.page;
+      arr.limit = res.data.limit;
+      res.data = arr;
+    }
+    return res;
+  },
 
   create: (data: {
     registration: string;
