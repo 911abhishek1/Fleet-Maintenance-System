@@ -1,6 +1,6 @@
 import './style.css';
 import { registerRoute, initRouter } from './router';
-import { isLoggedIn } from './state';
+import { isLoggedIn, isFleetManager } from './state';
 import { renderLayout, updateActiveNav } from './components/layout';
 import { renderLoginPage } from './pages/login';
 import { renderDashboardPage } from './pages/dashboard';
@@ -45,7 +45,7 @@ registerRoute({
 
 registerRoute({
   path: '/vehicles',
-  guard: () => isLoggedIn(),
+  guard: () => isLoggedIn() && isFleetManager(),
   render: async (_container) => {
     ensureLayout();
     const pageContent = document.getElementById('page-content')!;

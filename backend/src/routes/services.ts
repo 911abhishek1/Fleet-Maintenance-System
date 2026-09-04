@@ -192,6 +192,45 @@ router.get('/export-csv', requireFleetManager, async (req: AuthRequest, res: Res
   }
 });
 
+// GET /api/services/:id - Get service record by ID (Fleet Manager or Assigned Technician)
+router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const userRole = req.user?.role;
+  const userId = req.user?.id;
+
+  try {
+    const serviceRecord = await prisma.serviceRecord.findUnique({
+      where: { id },
+      include: {
+        vehicle: true,
+        assignments: {
+          include: {
+            user: { select: { id: true, email: true, role: true } },
+          },
+        },
+      },
+    });
+
+    if (!serviceRecord) {
+      res.status(404).json({ error: 'Service record not found' });
+      return;
+    }
+
+    if (userRole === 'TECHNICIAN') {
+      const isAssigned = serviceRecord.assignments.some((a) => a.userId === userId);
+      if (!isAssigned) {
+        res.status(403).json({ error: 'Forbidden: You are not assigned to this service record' });
+        return;
+      }
+    }
+
+    res.json(serviceRecord);
+  } catch (error) {
+    console.error('Get service record error:', error);
+    res.status(500).json({ error: 'Failed to get service record' });
+  }
+});
+
 // POST /api/services - Create service record (Fleet Manager only)
 // Always initializes status to DUE and sets dueDate to creation time (due now).
 router.post('/', requireFleetManager, async (req: AuthRequest, res: Response): Promise<void> => {

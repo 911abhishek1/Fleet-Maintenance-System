@@ -220,7 +220,8 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
                 <td>
                   <div class="action-group">
                     ${getTransitionButtons(r)}
-                    ${isFleetManager() ? `<button class="btn btn-ghost btn-sm assign-btn" data-id="${r.id}">👤+</button>` : ''}
+                    <button class="btn btn-ghost btn-sm edit-desc-btn" data-id="${r.id}" title="Update work description">✏️</button>
+                    ${isFleetManager() ? `<button class="btn btn-ghost btn-sm assign-btn" data-id="${r.id}" title="Manage technicians">👤+</button>` : ''}
                   </div>
                 </td>
               </tr>
@@ -313,6 +314,15 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
     });
   });
 
+  // Edit description buttons
+  container.querySelectorAll('.edit-desc-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const serviceId = (btn as HTMLElement).dataset.id!;
+      const record = records.find((r) => r.id === serviceId);
+      if (record) showEditDescriptionModal(record, container);
+    });
+  });
+
   // Assign buttons
   container.querySelectorAll('.assign-btn').forEach((btn) => {
     btn.addEventListener('click', () => {
@@ -324,21 +334,29 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
 }
 
 function getTransitionButtons(record: ServiceRecord): string {
-  if (!isFleetManager()) return '';
+  const isManager = isFleetManager();
   const transitions = VALID_TRANSITIONS[record.status] || [];
-  return transitions.map((status) => {
-    const labels: Record<string, string> = {
-      BOOKED: '📅 Book',
-      IN_SERVICE: '🔧 Start',
-      COMPLETED: '✅ Complete',
-    };
-    const classes: Record<string, string> = {
-      BOOKED: 'btn-secondary',
-      IN_SERVICE: 'btn-secondary',
-      COMPLETED: 'btn-success',
-    };
-    return `<button class="btn ${classes[status] || 'btn-ghost'} btn-sm transition-btn" data-id="${record.id}" data-status="${status}">${labels[status] || status}</button>`;
-  }).join('');
+
+  return transitions
+    .filter((status) => {
+      // Booking is strictly manager-only
+      if (status === 'BOOKED' && !isManager) return false;
+      return true;
+    })
+    .map((status) => {
+      const labels: Record<string, string> = {
+        BOOKED: '📅 Book',
+        IN_SERVICE: '🔧 Start',
+        COMPLETED: '✅ Complete',
+      };
+      const classes: Record<string, string> = {
+        BOOKED: 'btn-secondary',
+        IN_SERVICE: 'btn-secondary',
+        COMPLETED: 'btn-success',
+      };
+      return `<button class="btn ${classes[status] || 'btn-ghost'} btn-sm transition-btn" data-id="${record.id}" data-status="${status}">${labels[status] || status}</button>`;
+    })
+    .join('');
 }
 
 function showBookingModal(serviceId: string, pageContainer: HTMLElement): void {
@@ -444,13 +462,9 @@ async function showAddServiceModal(pageContainer: HTMLElement): Promise<void> {
       <label class="form-label" for="s-description">Description</label>
       <textarea id="s-description" class="form-textarea" placeholder="Regular maintenance, oil change…" required></textarea>
     </div>
-    <div class="form-group">
-      <label class="form-label" for="s-status">Initial Status</label>
-      <select id="s-status" class="form-select">
-        <option value="DUE">Due</option>
-        <option value="BOOKED">Booked</option>
-      </select>
-    </div>
+    <p style="color: var(--text-muted); font-size: var(--font-xs); margin-top: var(--space-2);">
+      * New services are initialized in <strong>Due</strong> status and must be booked after creation.
+    </p>
   `, `
     <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
     <button class="btn btn-primary" id="modal-submit">Create</button>
@@ -460,20 +474,54 @@ async function showAddServiceModal(pageContainer: HTMLElement): Promise<void> {
   document.getElementById('modal-submit')!.addEventListener('click', async () => {
     const vehicleId = (document.getElementById('s-vehicle') as HTMLSelectElement).value;
     const description = (document.getElementById('s-description') as HTMLTextAreaElement).value.trim();
-    const status = (document.getElementById('s-status') as HTMLSelectElement).value;
 
     if (!vehicleId || !description) {
-      toastError('Validation', 'Please fill in all fields.');
+      toastError('Validation', 'Please select a vehicle and enter a description.');
       return;
     }
 
     try {
-      await serviceAPI.create({ vehicleId, description, status });
+      await serviceAPI.create({ vehicleId, description });
       closeModal();
-      toastSuccess('Service created');
+      toastSuccess('Service created', 'New service record created in Due status.');
       await loadAndRender(pageContainer);
     } catch {
       toastError('Failed', 'Could not create service record.');
+    }
+  });
+}
+
+function showEditDescriptionModal(record: ServiceRecord, pageContainer: HTMLElement): void {
+  openModal('Edit Work Description', `
+    <p style="color: var(--text-secondary); font-size: var(--font-sm); margin-bottom: var(--space-4);">
+      <strong>${record.vehicle.registration}</strong> (${record.vehicle.make} ${record.vehicle.model})
+    </p>
+    <div class="form-group">
+      <label class="form-label" for="edit-service-desc">Description of Work</label>
+      <textarea id="edit-service-desc" class="form-textarea" required rows="4">${record.description}</textarea>
+    </div>
+  `, `
+    <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+    <button class="btn btn-primary" id="modal-submit">Save Description</button>
+  `);
+
+  document.getElementById('modal-cancel')!.addEventListener('click', closeModal);
+  document.getElementById('modal-submit')!.addEventListener('click', async () => {
+    const input = document.getElementById('edit-service-desc') as HTMLTextAreaElement;
+    const newDesc = input ? input.value.trim() : '';
+    if (!newDesc) {
+      toastError('Validation', 'Description cannot be empty.');
+      return;
+    }
+
+    try {
+      await serviceAPI.update(record.id, { description: newDesc });
+      closeModal();
+      toastSuccess('Updated', 'Work description updated successfully.');
+      await loadAndRender(pageContainer);
+    } catch (err: unknown) {
+      const axErr = err as { response?: { data?: { error?: string } } };
+      toastError('Failed', axErr.response?.data?.error ?? 'Could not update description.');
     }
   });
 }
