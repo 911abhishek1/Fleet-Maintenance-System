@@ -330,7 +330,7 @@ function renderContent(container: HTMLElement, data: DashboardData): void {
       if (btn) btn.style.opacity = '0.5';
       try {
         const res = await vehicleAPI.evaluateStatus();
-        toastSuccess('Evaluated', `${res.data.servicesCreated} new service records created.`);
+        toastSuccess('Evaluated', `${res.data.flaggedDue} vehicles flagged as due for service.`);
         await renderDashboardPage(container);
       } catch {
         toastError('Evaluation Failed', 'Could not evaluate vehicle statuses.');

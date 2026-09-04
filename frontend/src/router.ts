@@ -16,7 +16,16 @@ export function navigate(path: string): void {
 }
 
 export function getCurrentPath(): string {
-  return window.location.hash.slice(1) || '/dashboard';
+  const hash = window.location.hash.slice(1) || '/dashboard';
+  // Strip query string for route matching
+  const qIndex = hash.indexOf('?');
+  return qIndex >= 0 ? hash.slice(0, qIndex) : hash;
+}
+
+export function getQueryParams(): URLSearchParams {
+  const hash = window.location.hash.slice(1) || '';
+  const qIndex = hash.indexOf('?');
+  return new URLSearchParams(qIndex >= 0 ? hash.slice(qIndex + 1) : '');
 }
 
 function matchRoute(path: string): Route | undefined {

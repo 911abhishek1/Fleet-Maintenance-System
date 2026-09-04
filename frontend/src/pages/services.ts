@@ -2,12 +2,14 @@ import { serviceAPI, vehicleAPI, authAPI } from '../api';
 import { isFleetManager } from '../state';
 import { openModal, closeModal } from '../components/modal';
 import { toastSuccess, toastError, toastInfo } from '../components/toast';
+import { getQueryParams } from '../router';
 
 interface ServiceRecord {
   id: string;
   vehicleId: string;
   description: string;
   status: string;
+  dueDate: string | null;
   dateScheduled: string | null;
   dateCompleted: string | null;
   completedOdometer: number | null;
@@ -37,15 +39,13 @@ let filterTechniciansList: Array<{ id: string; email: string }> = [];
 
 const STATUS_BADGE_CLASS: Record<string, string> = {
   DUE: 'badge-due',
-  OVERDUE: 'badge-overdue',
   BOOKED: 'badge-booked',
   IN_SERVICE: 'badge-in-service',
   COMPLETED: 'badge-completed',
 };
 
 const VALID_TRANSITIONS: Record<string, string[]> = {
-  DUE: ['BOOKED', 'OVERDUE'],
-  OVERDUE: ['BOOKED'],
+  DUE: ['BOOKED'],
   BOOKED: ['IN_SERVICE'],
   IN_SERVICE: ['COMPLETED'],
 };
@@ -64,6 +64,14 @@ function formatDate(dateStr: string | null): string {
 }
 
 export async function renderServicesPage(container: HTMLElement): Promise<void> {
+  // Sync filters from URL query parameters (e.g. navigating from dashboard KPI cards)
+  const qp = getQueryParams();
+  filterStatus = qp.get('status') || '';
+  if (qp.has('search')) filterSearch = qp.get('search') || '';
+  if (qp.has('vehicleId')) filterVehicleId = qp.get('vehicleId') || '';
+  if (qp.has('technicianId')) filterTechnicianId = qp.get('technicianId') || '';
+  currentPage = 1;
+
   container.innerHTML = `<div class="loading-overlay"><div class="spinner"></div></div>`;
 
   if (isFleetManager() && filterVehiclesList.length === 0) {
@@ -187,6 +195,7 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
               <th>Vehicle</th>
               <th>Description</th>
               <th>Status</th>
+              <th>Due Date</th>
               <th>Scheduled</th>
               <th>Completed</th>
               <th>Technicians</th>
@@ -199,6 +208,7 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
                 <td><strong>${r.vehicle.registration}</strong><br/><span style="color:var(--text-muted);font-size:var(--font-xs);">${r.vehicle.make} ${r.vehicle.model}</span></td>
                 <td style="max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;">${r.description}</td>
                 <td><span class="badge ${STATUS_BADGE_CLASS[r.status] || ''}">${formatStatus(r.status)}</span></td>
+                <td>${formatDate(r.dueDate)}</td>
                 <td>${formatDate(r.dateScheduled)}</td>
                 <td>${formatDate(r.dateCompleted)}${r.completedOdometer ? `<br/><span style="color:var(--text-muted);font-size:var(--font-xs);">${r.completedOdometer.toLocaleString()} km</span>` : ''}</td>
                 <td>
@@ -285,6 +295,11 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
         return;
       }
 
+      if (newStatus === 'BOOKED') {
+        showBookingModal(serviceId, container);
+        return;
+      }
+
       try {
         await serviceAPI.update(serviceId, { status: newStatus });
         toastSuccess('Status updated', `→ ${formatStatus(newStatus)}`);
@@ -312,18 +327,50 @@ function getTransitionButtons(record: ServiceRecord): string {
   return transitions.map((status) => {
     const labels: Record<string, string> = {
       BOOKED: '📅 Book',
-      OVERDUE: '⚠ Overdue',
       IN_SERVICE: '🔧 Start',
       COMPLETED: '✅ Complete',
     };
     const classes: Record<string, string> = {
       BOOKED: 'btn-secondary',
-      OVERDUE: 'btn-danger',
       IN_SERVICE: 'btn-secondary',
       COMPLETED: 'btn-success',
     };
     return `<button class="btn ${classes[status] || 'btn-ghost'} btn-sm transition-btn" data-id="${record.id}" data-status="${status}">${labels[status] || status}</button>`;
   }).join('');
+}
+
+function showBookingModal(serviceId: string, pageContainer: HTMLElement): void {
+  openModal('Book Service', `
+    <p style="color: var(--text-secondary); font-size: var(--font-sm); margin-bottom: var(--space-4);">
+      Select a date to schedule this service.
+    </p>
+    <div class="form-group">
+      <label class="form-label" for="booking-date">Scheduled Date</label>
+      <input type="date" id="booking-date" class="form-input" required min="${new Date().toISOString().split('T')[0]}" />
+    </div>
+  `, `
+    <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
+    <button class="btn btn-primary" id="modal-submit">📅 Book</button>
+  `);
+
+  document.getElementById('modal-cancel')!.addEventListener('click', closeModal);
+  document.getElementById('modal-submit')!.addEventListener('click', async () => {
+    const dateInput = (document.getElementById('booking-date') as HTMLInputElement).value;
+    if (!dateInput) {
+      toastError('Validation', 'Please select a scheduled date.');
+      return;
+    }
+
+    try {
+      await serviceAPI.update(serviceId, { status: 'BOOKED', dateScheduled: new Date(dateInput).toISOString() });
+      closeModal();
+      toastSuccess('Service booked', `Scheduled for ${new Date(dateInput).toLocaleDateString()}`);
+      await loadAndRender(pageContainer);
+    } catch (err: unknown) {
+      const axErr = err as { response?: { data?: { error?: string } } };
+      toastError('Booking failed', axErr.response?.data?.error ?? 'Could not book service.');
+    }
+  });
 }
 
 function showCompleteModal(serviceId: string, pageContainer: HTMLElement): void {
