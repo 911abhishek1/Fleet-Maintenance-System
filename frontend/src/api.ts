@@ -1,7 +1,7 @@
 import axios from 'axios';
 import { getToken } from './state';
 
-const API_BASE = 'http://localhost:5000/api';
+const API_BASE = 'https://fleet-maintenance-backend-780q.onrender.com/api';
 
 const api = axios.create({
   baseURL: API_BASE,
