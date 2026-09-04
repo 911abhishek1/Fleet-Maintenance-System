@@ -13,7 +13,7 @@ interface ServiceRecord {
   dateScheduled: string | null;
   dateCompleted: string | null;
   completedOdometer: number | null;
-  vehicle: { registration: string; make: string; model: string };
+  vehicle: { registration: string; make: string; model: string; odometer?: number };
   assignments: Array<{ userId: string; user: { id: string; email: string } }>;
 }
 
@@ -22,6 +22,7 @@ interface Vehicle {
   registration: string;
   make: string;
   model: string;
+  odometer?: number;
 }
 
 let currentPage = 1;
@@ -291,7 +292,8 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
       const newStatus = (btn as HTMLElement).dataset.status!;
 
       if (newStatus === 'COMPLETED') {
-        showCompleteModal(serviceId, container);
+        const record = records.find((r) => r.id === serviceId);
+        showCompleteModal(serviceId, container, record);
         return;
       }
 
@@ -373,14 +375,15 @@ function showBookingModal(serviceId: string, pageContainer: HTMLElement): void {
   });
 }
 
-function showCompleteModal(serviceId: string, pageContainer: HTMLElement): void {
+function showCompleteModal(serviceId: string, pageContainer: HTMLElement, record?: ServiceRecord): void {
+  const currentOdometer = record?.vehicle?.odometer !== undefined ? record.vehicle.odometer : '';
   openModal('Complete Service', `
     <p style="color: var(--text-secondary); font-size: var(--font-sm); margin-bottom: var(--space-4);">
       Enter the current odometer reading to complete this service.
     </p>
     <div class="form-group">
       <label class="form-label" for="completed-odometer">Odometer Reading (km)</label>
-      <input type="number" id="completed-odometer" class="form-input" placeholder="55000" required min="0" />
+      <input type="number" id="completed-odometer" class="form-input" value="${currentOdometer}" placeholder="${currentOdometer !== '' ? currentOdometer : '55000'}" required min="${currentOdometer !== '' ? currentOdometer : 0}" />
     </div>
   `, `
     <button class="btn btn-secondary" id="modal-cancel">Cancel</button>
@@ -389,14 +392,26 @@ function showCompleteModal(serviceId: string, pageContainer: HTMLElement): void 
 
   document.getElementById('modal-cancel')!.addEventListener('click', closeModal);
   document.getElementById('modal-submit')!.addEventListener('click', async () => {
-    const odometer = (document.getElementById('completed-odometer') as HTMLInputElement).value;
-    if (!odometer) {
+    const input = document.getElementById('completed-odometer') as HTMLInputElement;
+    const rawVal = input ? input.value.trim() : '';
+    if (!rawVal) {
       toastError('Validation', 'Please enter the odometer reading.');
       return;
     }
 
+    const completedOdometer = Number(rawVal);
+    if (!Number.isFinite(completedOdometer) || completedOdometer < 0) {
+      toastError('Validation', 'Please enter a valid numeric odometer reading.');
+      return;
+    }
+
+    if (record?.vehicle?.odometer !== undefined && completedOdometer < record.vehicle.odometer) {
+      toastError('Validation', `Completed odometer (${completedOdometer}) cannot be less than current vehicle odometer (${record.vehicle.odometer}).`);
+      return;
+    }
+
     try {
-      await serviceAPI.update(serviceId, { status: 'COMPLETED', completedOdometer: odometer });
+      await serviceAPI.update(serviceId, { status: 'COMPLETED', completedOdometer });
       closeModal();
       toastSuccess('Service completed');
       await loadAndRender(pageContainer);

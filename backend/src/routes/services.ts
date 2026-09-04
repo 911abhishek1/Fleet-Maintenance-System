@@ -257,11 +257,19 @@ router.put('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
     return;
   }
 
+  // Parse completedOdometer if provided as a numeric string (HTTP transport compatibility)
+  const parsedCompletedOdometer =
+    completedOdometer !== undefined && completedOdometer !== null && completedOdometer !== ''
+      ? (typeof completedOdometer === 'string' && !isNaN(Number(completedOdometer))
+          ? Number(completedOdometer)
+          : completedOdometer)
+      : completedOdometer;
+
   try {
     const result = await updateServiceRecord(
       id,
       { id: caller.id, role: caller.role as 'FLEET_MANAGER' | 'TECHNICIAN' },
-      { description, status, dateScheduled, completedOdometer }
+      { description, status, dateScheduled, completedOdometer: parsedCompletedOdometer }
     );
     res.json(result.service);
   } catch (error: any) {
