@@ -114,3 +114,43 @@ This document records the architectural and engineering decisions made during th
   * Zero new npm dependencies added to the frontend.
   * Lightweight bundle size (< 50KB gzipped).
   * Seamless visual integration with the existing CSS design tokens and theme variables.
+
+---
+
+## ADR-010: Service-Scoped Inspection Checklists (Stretch Feature)
+
+* **Status**: Accepted
+* **Context**: Fleet operators require verification of mechanical checkpoints (e.g. brake pads, tire condition, fluids, lighting) during vehicle maintenance. The system needed a stretch feature to allow Fleet Managers to define checklist tasks for a service and assigned Technicians to record inspection results (`PENDING`, `PASS`, `FAIL`, `NOT_APPLICABLE`) and notes during service execution.
+* **Decision**:
+  1. **Minimal Schema Model**: Introduce `InspectionChecklistItem` tied via foreign key to `ServiceRecord` (`serviceRecordId`), not global to a vehicle or technician. Include `title`, `description`, `required`, `result`, `notes`, `checkedById`.
+  2. **Strict RBAC & Immutability**:
+     - Fleet Managers can create and delete checklist items for active services, and update results/notes as administrative overrides.
+     - Assigned Technicians can view and update results and notes only for services assigned to them.
+     - Unassigned Technicians are rejected with `HTTP 403 Forbidden`.
+     - Once a service transitions to `COMPLETED`, all checklist mutations (POST, PUT, DELETE) are strictly blocked with `HTTP 400`, locking the inspection history permanently.
+  3. **Audit Immutability & Decoupling**:
+     - `AuditLog` has **no foreign key** dependency on `InspectionChecklistItem`.
+     - Deleting a checklist item records `CHECKLIST_ITEM_DELETED` in the audit timeline *before* deletion, capturing the deleted item's title and previous result.
+     - Deleting checklist items leaves all audit records completely intact.
+  4. **Dedicated Routing**:
+     - Mount endpoints cleanly under `checklist.ts` (`/api/services/:serviceId/checklist`), keeping the existing lifecycle state machine (`serviceLifecycle.ts`) clean and unpolluted.
+* **Alternatives Considered**:
+  * *Alternative 1: Global inspection template engine with automated duplication into services*. Rejected as severe over-engineering for a focused stretch feature.
+  * *Alternative 2: Adding an `INSPECTION` state to `ServiceStatus`*. Rejected to preserve the core finite state machine (`DUE -> BOOKED -> IN_SERVICE -> COMPLETED`) without breaking existing transitions or requiring migration of historical statuses.
+  * *Alternative 3: AuditLog foreign key to checklist items*. Rejected because cascading deletes would erase historical audits, and restrictive deletes would prevent cleaning up drafting errors.
+* **Complexity Intentionally Avoided**:
+  * No template authoring engines or master checklist cloners.
+  * No WebSockets or background push workers.
+  * No external form validation or UI component frameworks.
+  * No new lifecycle states.
+
+---
+
+## What We Deliberately Did Not Build (Scope Boundaries)
+
+To maintain high code quality, complete test coverage, and enterprise stability within the project timeline, the following stretch ideas were intentionally excluded from this milestone:
+1. **Multi-Tenant Fleet Isolation**: Single-organization fleet management was prioritized. Multi-tenant partitioning was left out to avoid complex schema sharding.
+2. **Real-Time GPS Telematics & Odometer Ingestion**: Replaced by robust, transactional batch CSV import with row-by-row isolation.
+3. **Parts & Inventory Stock Management**: Service tickets record descriptions and notes; warehouse stock levels and SKU tracking were omitted.
+4. **Push Notification Daemons / Email Dispatchers**: Overdue alerts are calculated dynamically on query, avoiding distributed cron scheduler overhead.
+5. **PDF Report Generation**: Replaced by RFC 4180 CSV export and responsive UI viewports.

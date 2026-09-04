@@ -5,9 +5,13 @@ import prisma from '../db';
 import { updateServiceRecord } from '../services/serviceLifecycle';
 import { ValidationError, InvalidTransitionError, ForbiddenActionError } from '../domain/lifecycle';
 import { logAuditEvent } from '../domain/audit';
+import checklistRouter from './checklist';
 
 const router = Router();
 router.use(requireAuth);
+
+// Sub-router for vehicle inspection checklists
+router.use('/:serviceId/checklist', checklistRouter);
 
 // GET /api/services - Get all services (Fleet Manager) or assigned services (Technician)
 router.get('/', async (req: AuthRequest, res: Response) => {

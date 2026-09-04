@@ -71,6 +71,10 @@ The application defines two distinct roles via the `Role` enum:
 | Dismiss Overdue Alert | Yes | No (HTTP 403) | `requireFleetManager` |
 | Import Odometer CSV | Yes | No (HTTP 403) | `requireFleetManager` |
 | Export Service History CSV | Yes | Yes (scoped to assigned) | `services.ts` handler |
+| Create Checklist Item | Yes | No (HTTP 403) | `requireFleetManager` |
+| View Checklist Items | Yes (fleet-wide) | Assigned services only | `checklist.ts` scoping |
+| Update Checklist Result/Notes | Yes (override) | Assigned services only | `checklist.ts` authorization |
+| Delete Checklist Item | Yes | No (HTTP 403) | `requireFleetManager` |
 
 ---
 
@@ -197,3 +201,28 @@ The dashboard endpoint (`GET /api/dashboard`) aggregates fleet operations entire
 * `technicianBreakdown`: Assigned service metrics per technician (strictly filtered to the caller if a technician).
 * `completedLast8Weeks`: 8 partitioned calendar weeks with completions bucketed into their exact chronological week.
 * **Frontend Visualization**: Rendered via pure SVG bar chart, eliminating bulky charting libraries while preserving theme responsiveness.
+
+---
+
+## 10. Vehicle Inspection Checklists (Stretch Feature)
+
+The vehicle inspection checklist subsystem allows Fleet Managers to define mechanical verification items for service tickets and enables assigned Technicians to record inspection results and notes during maintenance.
+
+### Key Architectural Boundaries:
+1. **Service Record Scoping**:
+   * Checklist items belong strictly to an individual `ServiceRecord` (`serviceRecordId`), not global to a technician or vehicle.
+   * Cross-service item manipulation (IDOR) is prevented by verifying that the requested `:itemId` matches `:serviceId` in the database.
+2. **Strict RBAC & Enforcement**:
+   * Fleet Managers can create items (`POST`), delete items (`DELETE`), and execute administrative result overrides (`PUT`).
+   * Technicians can view (`GET`) and update results/notes (`PUT`) **only for services assigned to them**. Unassigned technicians receive `HTTP 403 Forbidden`.
+   * Technicians are prohibited from creating items, deleting items, or modifying service assignments.
+3. **Lifecycle Integration & Completed Locking**:
+   * Items may be added during `DUE`, `BOOKED`, or `IN_SERVICE` phases.
+   * Technicians complete inspections primarily during the `IN_SERVICE` phase.
+   * Once a service transitions to `COMPLETED`, all checklist mutation endpoints (`POST`, `PUT`, `DELETE`) are strictly rejected with `HTTP 400 Bad Request`, permanently locking the inspection history for compliance.
+4. **Audit Decoupling & Immutability**:
+   * `AuditLog` has no foreign key to `InspectionChecklistItem`.
+   * Material checklist modifications trigger immutable audit events (`CHECKLIST_ITEM_CREATED`, `CHECKLIST_RESULT_UPDATED`, `CHECKLIST_ITEM_DELETED`).
+   * When an item is deleted by a manager, `CHECKLIST_ITEM_DELETED` is written before deletion, and the audit trail remains permanently accessible even though the item row is removed.
+5. **Decoupled Routing**:
+   * Handled by a dedicated router ([`backend/src/routes/checklist.ts`](file:///c:/Users/energ/Desktop/Busy_Dummy/backend/src/routes/checklist.ts)) mounted under `/api/services/:serviceId/checklist`, keeping the core service lifecycle finite state machine clean.

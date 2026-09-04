@@ -34,6 +34,12 @@ fd9a595 (Milestone 5: Server-Side Querying & Pagination)
    │
    ▼
 7efbc84 (Milestone 8: Fleet Maintenance Dashboard)
+   │
+   ▼
+f2f7053 -> 6448efd (Milestone 9: Quality Assurance & Workflow Hardening)
+   │
+   ▼
+[Working Tree] (Milestone 10: Vehicle Inspection Checklists - Stretch Feature)
 ```
 
 ---
@@ -111,11 +117,31 @@ fd9a595 (Milestone 5: Server-Side Querying & Pagination)
   * Updated frontend dashboard with custom SVG bar chart, progress bar breakdown, and KPI cards.
 * **Verification**: 10 integration tests in `backend/src/routes/dashboard.test.ts` and real HTTP response verification.
 
+### Milestone 9: Quality Assurance & Workflow Hardening
+* **Commits**: `f2f7053`, `f0ca8ab`, `6448efd`
+* **Scope**:
+  * Added Due Date column to frontend Services table.
+  * Added booking date prompt modal prior to `DUE -> BOOKED` transition.
+  * Fixed numeric odometer parsing for service completion.
+  * Hardened technician assignment validation (reject assigning Fleet Managers).
+  * Restricted service creation to Fleet Managers and prevented IDOR on single-service access.
+* **Verification**: 14 workflow integration tests in `backend/src/routes/servicesWorkflow.test.ts`.
+
+### Milestone 10: Vehicle Inspection Checklists (Stretch Feature)
+* **Scope**:
+  * Added `ChecklistItemResult` enum (`PENDING`, `PASS`, `FAIL`, `NOT_APPLICABLE`) and `InspectionChecklistItem` model with Prisma migration `20260904113800_add_inspection_checklists`.
+  * Built dedicated router `backend/src/routes/checklist.ts` mounted under `/api/services/:serviceId/checklist`.
+  * Enforced strict server-side RBAC: Manager can define items and administrative overrides; assigned Technicians can update results/notes on assigned services; unassigned Technicians get `HTTP 403 Forbidden`.
+  * Enforced immutability on completed services: mutations rejected with `HTTP 400`.
+  * Ensured audit decoupling: `AuditLog` has no foreign key to checklist items, preserving audit history indefinitely even upon item deletion.
+  * Built frontend inspection checklist modal with progress bars, color-coded status badges, interactive result toggles, and technician notes.
+* **Verification**: 14 integration tests in `backend/src/routes/checklist.test.ts` (151 total passing backend tests), plus complete 15-step real HTTP E2E scenario run.
+
 ---
 
 ## 3. Remaining Work / Production Readiness (TODOs)
 
-The placement assignment requirements are fully satisfied. The following enhancements represent future production readiness tasks:
+The placement assignment requirements and chosen stretch feature are fully satisfied. The following enhancements represent future production readiness tasks:
 1. **[ ] Deployment & CI/CD Pipeline**: Setup automated GitHub Actions pipeline to run tests, build Vite assets, and deploy backend to a hosted container (e.g. AWS ECS, Render, or Fly.io).
 2. **[ ] Real-time WebSocket Updates**: Push alert badge updates and dashboard metrics over WebSockets to eliminate manual page reloads when maintenance status changes.
 3. **[ ] Email/SMS Alert Notifications**: Trigger email notifications to fleet managers when high-priority vehicles exceed grace periods.

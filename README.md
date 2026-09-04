@@ -1,6 +1,6 @@
 # Fleet Maintenance Management System (FleetPro)
 
-A full-stack fleet maintenance tracking and operations platform built to manage vehicle service lifecycles, schedule maintenance according to mileage and date intervals, enforce technician permissions, track immutable audit events, and monitor real-time fleet health via an operational dashboard.
+A full-stack fleet maintenance tracking and operations platform built to manage vehicle service lifecycles, schedule maintenance according to mileage and date intervals, enforce technician permissions, track immutable audit events, monitor real-time fleet health via an operational dashboard, and conduct vehicle inspection checklists.
 
 ---
 

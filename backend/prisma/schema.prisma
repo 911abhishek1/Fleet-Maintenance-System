@@ -18,13 +18,21 @@ enum ServiceStatus {
   COMPLETED
 }
 
+enum ChecklistItemResult {
+  PENDING
+  PASS
+  FAIL
+  NOT_APPLICABLE
+}
+
 model User {
-  id           String                 @id @default(uuid())
-  email        String                 @unique
-  passwordHash String
-  role         Role
-  assignments  TechnicianAssignment[]
-  auditLogs    AuditLog[]
+  id                      String                    @id @default(uuid())
+  email                   String                    @unique
+  passwordHash            String
+  role                    Role
+  assignments             TechnicianAssignment[]
+  auditLogs               AuditLog[]
+  inspectedChecklistItems InspectionChecklistItem[]
 }
 
 model Vehicle {
@@ -47,24 +55,42 @@ model Vehicle {
 }
 
 model ServiceRecord {
-  id                String                 @id @default(uuid())
+  id                String                    @id @default(uuid())
   vehicleId         String
-  vehicle           Vehicle                @relation(fields: [vehicleId], references: [id])
-  cycle             Int                    @default(1)
+  vehicle           Vehicle                   @relation(fields: [vehicleId], references: [id])
+  cycle             Int                       @default(1)
   description       String
-  status            ServiceStatus          @default(DUE)
+  status            ServiceStatus             @default(DUE)
   dueDate           DateTime?
   dateScheduled     DateTime?
   dateCompleted     DateTime?
   completedOdometer Int?
   assignments       TechnicianAssignment[]
+  checklistItems    InspectionChecklistItem[]
   auditLogs         AuditLog[]
-  createdAt         DateTime               @default(now())
-  updatedAt         DateTime               @updatedAt
+  createdAt         DateTime                  @default(now())
+  updatedAt         DateTime                  @updatedAt
 
   @@index([vehicleId, status])
   @@index([status, updatedAt])
   @@index([dateScheduled])
+}
+
+model InspectionChecklistItem {
+  id              String              @id @default(uuid())
+  serviceRecordId String
+  serviceRecord   ServiceRecord       @relation(fields: [serviceRecordId], references: [id], onDelete: Cascade)
+  title           String
+  description     String?
+  required        Boolean             @default(false)
+  result          ChecklistItemResult @default(PENDING)
+  notes           String?
+  checkedById     String?
+  checkedBy       User?               @relation(fields: [checkedById], references: [id], onDelete: SetNull)
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+
+  @@index([serviceRecordId])
 }
 
 model TechnicianAssignment {

@@ -169,3 +169,61 @@ The following prompts represent the actual instructions issued across the projec
   > Return: vehiclesDue, vehiclesInService, completedThisWeek, overdue, statusBreakdown, technicianBreakdown, completedLast8Weeks.
   > Respect archived vehicles appropriately (exclude from active operational metrics).
   > Update frontend dashboard page to consume endpoint, showing 4 KPI cards, status breakdown, technician breakdown, and 8-week completed chart (using lightweight SVG rendering with zero heavy chart dependencies)."
+
+---
+
+### Phase 10: Quality Assurance, Hardening & E2E Bug Fixes
+* **Prompt Type**: `[SUMMARY]`
+* **Commits**: `f2f7053`, `f0ca8ab`, `6448efd`
+* **Instruction**:
+  > Complete end-to-end audit and bugfixes across frontend and backend integration:
+  > - Add "Due Date" column to the frontend Services table.
+  > - Add Booking modal prompting for `dateScheduled` prior to `DUE -> BOOKED` transition.
+  > - Fix dashboard "Evaluate Status" response property mapping (`flaggedDue`).
+  > - Fix `completedOdometer` string-to-numeric extraction in completion modal and backend transport compatibility.
+  > - Restrict service creation to Fleet Managers only, initialize manually created records in `DUE` status, enforce technician assignment validation (reject assigning Fleet Managers), and prevent IDOR on single-service lookups.
+
+---
+
+### Phase 11: Stretch Feature — Vehicle Inspection Checklists
+* **Prompt Type**: `[VERBATIM]`
+* **Commit**: `UNCOMMITTED (Verification In Progress)`
+* **Instruction**:
+  > "You are the lead engineer extending the already-completed Fleet Maintenance System.
+  >
+  > IMPORTANT CONTEXT:
+  > The application has already completed all 10 core assignment goals:
+  > 1. Accounts/RBAC
+  > 2. Vehicles
+  > 3. Service records
+  > 4. Service lifecycle
+  > 5. Technician assignment
+  > 6. Server-side service search/filter/sort/pagination
+  > 7. Bulk odometer CSV + service history export
+  > 8. Dashboard
+  > 9. Immutable audit timeline
+  > 10. Overdue alerts + cycle-aware dismissal
+  >
+  > Do NOT compromise, weaken, or rewrite any of these core requirements.
+  >
+  > We now want to add ONE optional stretch feature:
+  > # VEHICLE INSPECTION CHECKLISTS
+  >
+  > This stretch feature must feel like a natural extension of the existing fleet-maintenance domain.
+  >
+  > GOAL: Allow a Fleet Manager to define and manage inspection checklist items for a vehicle/service workflow, and allow the assigned Technician to record inspection results while working on the service. The feature should be simple, useful, professional, and well integrated. Do NOT turn this into a large inspection-management platform.
+  >
+  > FUNCTIONAL DESIGN:
+  > InspectionChecklistItem: id, serviceRecordId, title, description or guidance (optional), required boolean, status/result (PENDING, PASS, FAIL, NOT_APPLICABLE), notes, checkedBy / actor if needed, createdAt, updatedAt.
+  > Checklist items belong to a SERVICE RECORD, not globally to a technician.
+  >
+  > ROLE RULES:
+  > - Fleet Manager: Can create checklist items, edit/remove checklist items, view results, see inspection history. Administrative overrides allowed.
+  > - Assigned Technician: Can view checklist items for assigned services, update result/status, add/update inspection notes. MUST NOT modify assignment or maintenance intervals. MUST NOT access unassigned services.
+  > - Unassigned Technician: 403 / denied access for checklist endpoints. Server-side enforced.
+  >
+  > LIFECYCLE: DUE (Manager defines), BOOKED (remains visible), IN_SERVICE (Assigned tech completes), COMPLETED (read-only historical record). Do NOT alter DUE -> BOOKED -> IN_SERVICE -> COMPLETED.
+  >
+  > AUDIT: Preserve audit history. Do not create a FK dependency from AuditLog to checklist items. Deleting a checklist item must not delete or invalidate audit history. Material actions logged: CHECKLIST_ITEM_CREATED, CHECKLIST_RESULT_UPDATED, CHECKLIST_ITEM_DELETED. GET requests do not create audit records.
+  >
+  > ROUTING & ARCHITECTURE: Dedicated checklist router mounted cleanly under /api/services/:serviceId/checklist. Avoid putting checklist logic into serviceLifecycle.ts."

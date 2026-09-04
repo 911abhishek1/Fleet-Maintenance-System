@@ -1,6 +1,6 @@
-import { serviceAPI, vehicleAPI, authAPI } from '../api';
+import { serviceAPI, vehicleAPI, authAPI, checklistAPI, type ChecklistItem } from '../api';
 import { isFleetManager } from '../state';
-import { openModal, closeModal } from '../components/modal';
+import { openModal, closeModal, getModalBody } from '../components/modal';
 import { toastSuccess, toastError, toastInfo } from '../components/toast';
 import { getQueryParams } from '../router';
 
@@ -220,6 +220,7 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
                 <td>
                   <div class="action-group">
                     ${getTransitionButtons(r)}
+                    <button class="btn btn-ghost btn-sm checklist-btn" data-id="${r.id}" title="Inspection Checklist">📋 Checklist</button>
                     <button class="btn btn-ghost btn-sm edit-desc-btn" data-id="${r.id}" title="Update work description">✏️</button>
                     ${isFleetManager() ? `<button class="btn btn-ghost btn-sm assign-btn" data-id="${r.id}" title="Manage technicians">👤+</button>` : ''}
                   </div>
@@ -320,6 +321,15 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
       const serviceId = (btn as HTMLElement).dataset.id!;
       const record = records.find((r) => r.id === serviceId);
       if (record) showEditDescriptionModal(record, container);
+    });
+  });
+
+  // Checklist buttons
+  container.querySelectorAll('.checklist-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const serviceId = (btn as HTMLElement).dataset.id!;
+      const record = records.find((r) => r.id === serviceId);
+      if (record) showChecklistModal(record, container);
     });
   });
 
@@ -648,4 +658,258 @@ function debounce(fn: (e: Event) => void, delay: number): (e: Event) => void {
     clearTimeout(timer);
     timer = setTimeout(() => fn(e), delay);
   };
+}
+
+async function showChecklistModal(record: ServiceRecord, _pageContainer: HTMLElement): Promise<void> {
+  const isManager = isFleetManager();
+  const isCompleted = record.status === 'COMPLETED';
+
+  openModal(
+    `Inspection Checklist — ${record.vehicle.registration}`,
+    `<div class="loading-overlay" style="min-height: 180px;"><div class="spinner"></div></div>`,
+    `<button class="btn btn-secondary" id="checklist-modal-close">Close</button>`
+  );
+
+  document.getElementById('checklist-modal-close')?.addEventListener('click', closeModal);
+
+  async function renderModalContent(): Promise<void> {
+    const modalBody = getModalBody();
+    if (!modalBody) return;
+
+    try {
+      const res = await checklistAPI.list(record.id);
+      const items: ChecklistItem[] = res.data;
+
+      const total = items.length;
+      const passed = items.filter((i) => i.result === 'PASS').length;
+      const failed = items.filter((i) => i.result === 'FAIL').length;
+      const na = items.filter((i) => i.result === 'NOT_APPLICABLE').length;
+      const pending = items.filter((i) => i.result === 'PENDING').length;
+
+      const passPct = total > 0 ? Math.round((passed / total) * 100) : 0;
+      const failPct = total > 0 ? Math.round((failed / total) * 100) : 0;
+      const naPct = total > 0 ? Math.round((na / total) * 100) : 0;
+
+      modalBody.innerHTML = `
+        <div class="checklist-modal-container">
+          <!-- Meta Header -->
+          <div class="checklist-meta-header">
+            <div>
+              <strong>${record.vehicle.registration}</strong> — ${record.vehicle.make} ${record.vehicle.model}
+              <div style="font-size: var(--font-xs); color: var(--text-muted); margin-top: 2px;">
+                Service: ${record.description}
+              </div>
+            </div>
+            <span class="badge ${STATUS_BADGE_CLASS[record.status] || ''}">${formatStatus(record.status)}</span>
+          </div>
+
+          <!-- Progress and stats -->
+          ${total > 0 ? `
+            <div style="display: flex; flex-direction: column; gap: var(--space-2);">
+              <div class="checklist-progress-bar-container">
+                <div class="checklist-progress-pass" style="width: ${passPct}%;"></div>
+                <div class="checklist-progress-fail" style="width: ${failPct}%;"></div>
+                <div class="checklist-progress-na" style="width: ${naPct}%;"></div>
+              </div>
+              <div class="checklist-stats-bar">
+                <span class="checklist-stat-pill"><span class="checklist-stat-dot" style="background: var(--success);"></span> Passed: ${passed}</span>
+                <span class="checklist-stat-pill"><span class="checklist-stat-dot" style="background: var(--error);"></span> Failed: ${failed}</span>
+                <span class="checklist-stat-pill"><span class="checklist-stat-dot" style="background: #64748b;"></span> N/A: ${na}</span>
+                <span class="checklist-stat-pill"><span class="checklist-stat-dot" style="background: var(--warning);"></span> Pending: ${pending}</span>
+                <span style="margin-left: auto; color: var(--text-muted);">Total: ${total}</span>
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- Completed Read-Only Notice -->
+          ${isCompleted ? `
+            <div class="checklist-locked-banner">
+              <span>🔒</span>
+              <div>
+                <strong>Service Completed — Inspection Record Locked</strong><br/>
+                All checklist results and technician notes are preserved permanently for compliance.
+              </div>
+            </div>
+          ` : ''}
+
+          <!-- Checklist Items -->
+          <div class="checklist-items-list">
+            ${items.length === 0 ? `
+              <div style="text-align: center; padding: var(--space-6); color: var(--text-muted);">
+                <p>No inspection checklist items defined for this service.</p>
+                ${isManager && !isCompleted ? `<p style="font-size: var(--font-xs); margin-top: var(--space-1);">Use the form below to define inspection tasks.</p>` : ''}
+              </div>
+            ` : items.map((item) => {
+              const badgeClass = item.result === 'PASS'
+                ? 'badge-result-pass'
+                : item.result === 'FAIL'
+                ? 'badge-result-fail'
+                : item.result === 'NOT_APPLICABLE'
+                ? 'badge-result-na'
+                : 'badge-result-pending';
+
+              const checkedByLabel = item.checkedBy
+                ? `<span style="font-size: var(--font-xs); color: var(--text-muted);">Checked by ${item.checkedBy.email.split('@')[0]}</span>`
+                : '';
+
+              return `
+                <div class="checklist-card" data-item-id="${item.id}">
+                  <div class="checklist-card-header">
+                    <div>
+                      <div class="checklist-card-title">
+                        ${item.title}
+                        ${item.required ? `<span class="badge-required">Required</span>` : ''}
+                      </div>
+                      ${item.description ? `<div class="checklist-card-desc">${item.description}</div>` : ''}
+                    </div>
+                    <div style="display: flex; align-items: center; gap: var(--space-2);">
+                      <span class="badge ${badgeClass}">${formatStatus(item.result)}</span>
+                      ${isManager && !isCompleted ? `
+                        <button class="btn btn-ghost btn-sm delete-item-btn" data-item-id="${item.id}" title="Delete item" style="color: var(--error); padding: 2px 6px;">🗑️</button>
+                      ` : ''}
+                    </div>
+                  </div>
+
+                  <!-- Actions / Result / Notes -->
+                  ${!isCompleted ? `
+                    <div class="checklist-actions-row">
+                      <div style="display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap;">
+                        <span style="font-size: var(--font-xs); color: var(--text-secondary); font-weight: 500;">Result:</span>
+                        <div class="result-btn-group">
+                          <button class="result-btn ${item.result === 'PASS' ? 'active-pass' : ''}" data-item-id="${item.id}" data-val="PASS">PASS</button>
+                          <button class="result-btn ${item.result === 'FAIL' ? 'active-fail' : ''}" data-item-id="${item.id}" data-val="FAIL">FAIL</button>
+                          <button class="result-btn ${item.result === 'NOT_APPLICABLE' ? 'active-na' : ''}" data-item-id="${item.id}" data-val="NOT_APPLICABLE">N/A</button>
+                          <button class="result-btn ${item.result === 'PENDING' ? 'active-pending' : ''}" data-item-id="${item.id}" data-val="PENDING">PENDING</button>
+                        </div>
+                        ${checkedByLabel}
+                      </div>
+                    </div>
+
+                    <div style="display: flex; gap: var(--space-2); align-items: flex-start; margin-top: var(--space-1);">
+                      <input type="text" class="form-input checklist-note-input" data-item-id="${item.id}" placeholder="Inspection notes / measurements (optional)" value="${item.notes ? item.notes.replace(/"/g, '&quot;') : ''}" style="font-size: var(--font-xs); padding: var(--space-1) var(--space-2); height: 32px;" />
+                      <button class="btn btn-secondary btn-sm save-note-btn" data-item-id="${item.id}" style="height: 32px; font-size: var(--font-xs); white-space: nowrap;">Save Note</button>
+                    </div>
+                  ` : `
+                    ${item.notes ? `
+                      <div style="font-size: var(--font-xs); color: var(--text-secondary); background: var(--bg-glass); padding: var(--space-2); border-radius: var(--radius-sm); border: 1px solid var(--border-primary);">
+                        <strong>Notes:</strong> ${item.notes}
+                        ${checkedByLabel ? `<br/>${checkedByLabel}` : ''}
+                      </div>
+                    ` : (checkedByLabel ? `<div style="font-size: var(--font-xs);">${checkedByLabel}</div>` : '')}
+                  `}
+                </div>
+              `;
+            }).join('')}
+          </div>
+
+          <!-- Add Item Form (Manager Only, Active Service Only) -->
+          ${isManager && !isCompleted ? `
+            <div class="checklist-add-form">
+              <div style="font-size: var(--font-sm); font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: var(--space-2);">
+                ➕ Add Inspection Item
+              </div>
+              <div style="display: flex; gap: var(--space-2); flex-wrap: wrap;">
+                <input type="text" id="new-item-title" class="form-input" placeholder="Item title (e.g. Brake condition, Tire tread)" style="flex: 1; min-width: 180px;" />
+                <input type="text" id="new-item-desc" class="form-input" placeholder="Guidance / specifications (optional)" style="flex: 1; min-width: 180px;" />
+              </div>
+              <div style="display: flex; align-items: center; justify-content: space-between; margin-top: var(--space-1);">
+                <label style="display: inline-flex; align-items: center; gap: var(--space-2); font-size: var(--font-xs); color: var(--text-secondary); cursor: pointer;">
+                  <input type="checkbox" id="new-item-required" /> Required Inspection Item
+                </label>
+                <button class="btn btn-primary btn-sm" id="btn-add-item">Add to Checklist</button>
+              </div>
+            </div>
+          ` : ''}
+        </div>
+      `;
+
+      // Result buttons listener
+      modalBody.querySelectorAll('.result-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const itemId = (btn as HTMLElement).dataset.itemId!;
+          const newVal = (btn as HTMLElement).dataset.val!;
+          try {
+            await checklistAPI.update(record.id, itemId, { result: newVal });
+            toastSuccess('Inspection Updated', `Result set to ${formatStatus(newVal)}`);
+            await renderModalContent();
+          } catch (err: unknown) {
+            const axErr = err as { response?: { data?: { error?: string } } };
+            toastError('Update Failed', axErr.response?.data?.error ?? 'Could not update result.');
+          }
+        });
+      });
+
+      // Save note buttons listener
+      modalBody.querySelectorAll('.save-note-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const itemId = (btn as HTMLElement).dataset.itemId!;
+          const noteInput = modalBody.querySelector(`.checklist-note-input[data-item-id="${itemId}"]`) as HTMLInputElement;
+          const notes = noteInput ? noteInput.value.trim() : '';
+          try {
+            await checklistAPI.update(record.id, itemId, { notes });
+            toastSuccess('Note Saved');
+            await renderModalContent();
+          } catch (err: unknown) {
+            const axErr = err as { response?: { data?: { error?: string } } };
+            toastError('Save Failed', axErr.response?.data?.error ?? 'Could not save note.');
+          }
+        });
+      });
+
+      // Delete item buttons listener
+      modalBody.querySelectorAll('.delete-item-btn').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          const itemId = (btn as HTMLElement).dataset.itemId!;
+          if (!confirm('Are you sure you want to delete this checklist item?')) return;
+          try {
+            await checklistAPI.delete(record.id, itemId);
+            toastSuccess('Checklist item removed');
+            await renderModalContent();
+          } catch (err: unknown) {
+            const axErr = err as { response?: { data?: { error?: string } } };
+            toastError('Delete Failed', axErr.response?.data?.error ?? 'Could not delete item.');
+          }
+        });
+      });
+
+      // Add item button listener
+      const addBtn = modalBody.querySelector('#btn-add-item');
+      if (addBtn) {
+        addBtn.addEventListener('click', async () => {
+          const titleInput = modalBody.querySelector('#new-item-title') as HTMLInputElement;
+          const descInput = modalBody.querySelector('#new-item-desc') as HTMLInputElement;
+          const reqCheck = modalBody.querySelector('#new-item-required') as HTMLInputElement;
+
+          const title = titleInput.value.trim();
+          if (!title) {
+            toastError('Validation', 'Checklist item title cannot be empty.');
+            return;
+          }
+
+          try {
+            await checklistAPI.create(record.id, {
+              title,
+              description: descInput.value.trim() || undefined,
+              required: reqCheck.checked,
+            });
+            toastSuccess('Item Added', title);
+            await renderModalContent();
+          } catch (err: unknown) {
+            const axErr = err as { response?: { data?: { error?: string } } };
+            toastError('Add Failed', axErr.response?.data?.error ?? 'Could not add checklist item.');
+          }
+        });
+      }
+    } catch (err: unknown) {
+      const axErr = err as { response?: { data?: { error?: string } } };
+      modalBody.innerHTML = `
+        <div style="padding: var(--space-6); text-align: center; color: var(--error);">
+          <p>Failed to load inspection checklist.</p>
+          <p style="font-size: var(--font-xs); margin-top: var(--space-2);">${axErr.response?.data?.error ?? 'Service checklist is unavailable or access was denied.'}</p>
+        </div>
+      `;
+    }
+  }
+
+  await renderModalContent();
 }

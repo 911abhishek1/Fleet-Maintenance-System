@@ -142,4 +142,42 @@ export const dashboardAPI = {
   get: () => api.get('/dashboard'),
 };
 
+// --- Checklists ---
+export interface ChecklistItem {
+  id: string;
+  serviceRecordId: string;
+  title: string;
+  description: string | null;
+  required: boolean;
+  result: 'PENDING' | 'PASS' | 'FAIL' | 'NOT_APPLICABLE';
+  notes: string | null;
+  checkedById: string | null;
+  checkedBy?: { id: string; email: string; role: string } | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const checklistAPI = {
+  list: (serviceId: string) =>
+    api.get<ChecklistItem[]>(`/services/${serviceId}/checklist`),
+
+  create: (serviceId: string, data: { title: string; description?: string; required?: boolean }) =>
+    api.post<ChecklistItem>(`/services/${serviceId}/checklist`, data),
+
+  update: (
+    serviceId: string,
+    itemId: string,
+    data: {
+      result?: string;
+      notes?: string | null;
+      title?: string;
+      description?: string;
+      required?: boolean;
+    }
+  ) => api.put<ChecklistItem>(`/services/${serviceId}/checklist/${itemId}`, data),
+
+  delete: (serviceId: string, itemId: string) =>
+    api.delete(`/services/${serviceId}/checklist/${itemId}`),
+};
+
 export default api;

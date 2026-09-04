@@ -52,6 +52,13 @@ The Fleet Maintenance System is an enterprise full-stack platform designed to au
      * `technicianBreakdown`: Assigned workload per technician. Technicians only receive their own metrics.
      * `completedLast8Weeks`: Weekly completed service counts across the latest 8 calendar weeks, preserving zero-count weeks.
    * Lightweight responsive SVG bar chart rendered on the frontend with zero third-party charting libraries.
+8. **Vehicle Inspection Checklists (Stretch Feature)**:
+   * Fleet Managers can define mechanical checkpoints (e.g. Brake condition, Tire tread depth, Fluid levels) for any active service ticket.
+   * Assigned Technicians record structured results (`PENDING`, `PASS`, `FAIL`, `NOT_APPLICABLE`) and notes during service execution (`IN_SERVICE`).
+   * Unassigned technicians are denied access (`HTTP 403 Forbidden`).
+   * When a service reaches `COMPLETED` status, all checklist items become permanently read-only (`HTTP 400` on mutation attempts).
+   * Material actions write immutable audit events (`CHECKLIST_ITEM_CREATED`, `CHECKLIST_RESULT_UPDATED`, `CHECKLIST_ITEM_DELETED`).
+   * The `AuditLog` table has zero foreign key dependency on checklist items, ensuring audit trails remain permanently intact even if checklist items are removed.
 
 ---
 
@@ -171,7 +178,7 @@ Because this repository does not include a committed static database seed script
 
 ## 7. Test Verification
 
-The test suite consists of **123 automated tests across 26 test suites**, executing through Node.js native test runner:
+The test suite consists of **151 automated tests across 28 test suites**, executing through Node.js native test runner (`tsx --test src/**/*.test.ts`):
 
 ```bash
 cd backend
@@ -186,6 +193,8 @@ npm test
 5. `backend/src/routes/csv.test.ts` (15 tests) — Multipart uploads, row-by-row isolation, duplicate handling, and RFC 4180 CSV escaping.
 6. `backend/src/routes/alerts.test.ts` (18 tests) — Query-time overdue derivation, manager-only dismissal, cycle scoping, and next-cycle re-alerting.
 7. `backend/src/routes/dashboard.test.ts` (10 tests) — Fleet-wide vs. technician-scoped KPI metrics, calendar week boundaries, and 8-week completion buckets.
+8. `backend/src/routes/servicesWorkflow.test.ts` (14 tests) — Service creation rules, technician assignment validation, IDOR scoping, and lifecycle permissions.
+9. `backend/src/routes/checklist.test.ts` (14 tests) — Checklist creation, assigned technician result/notes recording, unassigned 403 blocking, IDOR prevention, completed service locking, and decoupled audit event immutability.
 
 ---
 
@@ -203,6 +212,9 @@ npm test
 4. **Single Active Service Record per Vehicle**:
    * *Tradeoff*: The evaluation engine enforces that vehicles with an active service (`status !== 'COMPLETED'`) do not generate duplicate due service records.
    * *Rationale*: Prevents workshop clutter and redundant technician assignments for vehicles already in the maintenance pipeline.
+5. **Service-Scoped Checklists & Audit Decoupling**:
+   * *Tradeoff*: Inspection checklist items belong to individual service tickets without master template engines or foreign-key locks in the `AuditLog` table.
+   * *Rationale*: Avoids complex template synchronization and allows managers to clean up drafting mistakes without violating audit immutability or breaking historical logs.
 
 ---
 

@@ -10,9 +10,11 @@ This document details the database architecture, schema models, relations, index
 erDiagram
     User ||--o{ TechnicianAssignment : "is assigned to"
     User ||--o{ AuditLog : "performed"
+    User ||--o{ InspectionChecklistItem : "inspected"
     Vehicle ||--o{ ServiceRecord : "undergoes"
     Vehicle ||--o{ AuditLog : "audited on"
     ServiceRecord ||--o{ TechnicianAssignment : "assigned to"
+    ServiceRecord ||--o{ InspectionChecklistItem : "contains"
     ServiceRecord ||--o{ AuditLog : "audited on"
 
     User {
@@ -121,11 +123,25 @@ Append-only immutable audit trail capturing state changes, technician assignment
 * `vehicleId` (`String`, Nullable, Foreign Key $\to$ `Vehicle.id`).
 * `serviceRecordId` (`String`, Nullable, Foreign Key $\to$ `ServiceRecord.id`).
 * `changedById` (`String`, Nullable, Foreign Key $\to$ `User.id`): User who executed the action.
-* `action` (`String`): Audit action identifier (e.g. `'SERVICE_CREATED'`, `'SERVICE_BOOKED'`, `'SERVICE_COMPLETED'`, `'TECHNICIAN_ASSIGNED'`, `'ALERT_DISMISSED'`).
-* `field` (`String`): Field modified (e.g. `'status'`, `'assignments'`, `'dismissedAlertCycle'`).
+* `action` (`String`): Audit action identifier (e.g. `'SERVICE_CREATED'`, `'SERVICE_BOOKED'`, `'SERVICE_COMPLETED'`, `'TECHNICIAN_ASSIGNED'`, `'ALERT_DISMISSED'`, `'CHECKLIST_ITEM_CREATED'`, `'CHECKLIST_RESULT_UPDATED'`, `'CHECKLIST_ITEM_DELETED'`).
+* `field` (`String`): Field modified (e.g. `'status'`, `'assignments'`, `'dismissedAlertCycle'`, `'result'`, `'title'`).
 * `oldValue` (`String`, Nullable), `newValue` (`String`, Nullable): Previous and new serialized values.
 * `notes` (`String`, Nullable): Human-readable context and metadata.
 * `createdAt` (`DateTime`, Default `now()`): Immutable creation timestamp.
+* **Preservation Guarantee**: `AuditLog` has **no foreign-key dependency** on `InspectionChecklistItem`. Deleting checklist items leaves all audit records permanently intact and immutable.
+
+### 2.6 `InspectionChecklistItem` (Stretch Feature)
+Represents a mechanical inspection checkpoint attached to an individual service record.
+* `id` (`String`, UUID, Primary Key): Unique identifier.
+* `serviceRecordId` (`String`, Foreign Key $\to$ `ServiceRecord.id`, `onDelete: Cascade`): Target service ticket.
+* `title` (`String`): Inspection task name (e.g. "Brake condition", "Tire tread depth").
+* `description` (`String`, Nullable): Inspection guidance, measurements, or tolerance specifications.
+* `required` (`Boolean`, Default `false`): Flag indicating mandatory verification.
+* `result` (`ChecklistItemResult` enum, Default `PENDING`): `PENDING`, `PASS`, `FAIL`, or `NOT_APPLICABLE`.
+* `notes` (`String`, Nullable): Technician observations or measurements.
+* `checkedById` (`String`, Nullable, Foreign Key $\to$ `User.id`, `onDelete: SetNull`): User who recorded the result.
+* `createdAt` (`DateTime`, Default `now()`): Creation timestamp.
+* `updatedAt` (`DateTime`, Auto-updated): Last modification timestamp.
 
 ---
 
@@ -168,12 +184,14 @@ The indexes configured in [`backend/prisma/schema.prisma`](file:///c:/Users/ener
 3. **`TechnicianAssignment`**:
    * `@@id([serviceRecordId, userId])`: Composite primary key preventing duplicate technician assignments.
    * `@@index([userId])`: Optimizes technician-scoped service queries (`assignments: { some: { userId } }`).
+4. **`InspectionChecklistItem`**:
+   * `@@index([serviceRecordId])`: Optimizes retrieval of checklist items when rendering service details.
 
 ---
 
 ## 5. Actual Migration History
 
-The database schema has been applied through 3 tracked Prisma migrations in `backend/prisma/migrations/`:
+The database schema has been applied through 4 tracked Prisma migrations in `backend/prisma/migrations/`:
 
 1. **`0_init`**:
    Initial baseline schema defining `User`, `Vehicle`, `ServiceRecord`, `TechnicianAssignment`, and `AuditLog`.
@@ -191,3 +209,8 @@ The database schema has been applied through 3 tracked Prisma migrations in `bac
    * Added index `ServiceRecord(status, updatedAt)`.
    * Added index `ServiceRecord(dateScheduled)`.
    * Added index `TechnicianAssignment(userId)`.
+4. **`20260904113800_add_inspection_checklists`**:
+   * Created enum `ChecklistItemResult` (`PENDING`, `PASS`, `FAIL`, `NOT_APPLICABLE`).
+   * Created table `InspectionChecklistItem`.
+   * Added index `InspectionChecklistItem(serviceRecordId)`.
+   * Configured foreign keys with cascade on `ServiceRecord` and set-null on `User`.
