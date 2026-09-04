@@ -128,6 +128,9 @@ export const serviceAPI = {
 
   exportCSV: () =>
     api.get('/services/export-csv', { responseType: 'blob' }),
+
+  timeline: (serviceId: string) =>
+    api.get<AuditLogEntry[]>(`/services/${serviceId}/timeline`),
 };
 
 // --- Alerts ---
@@ -141,6 +144,25 @@ export const alertAPI = {
 export const dashboardAPI = {
   get: () => api.get('/dashboard'),
 };
+
+// --- Audit Log / Timeline ---
+export interface AuditLogEntry {
+  id: string;
+  vehicleId: string | null;
+  serviceRecordId: string | null;
+  changedById: string | null;
+  action: string;
+  field: string;
+  oldValue: string | null;
+  newValue: string | null;
+  notes: string | null;
+  createdAt: string;
+  changedBy?: {
+    id: string;
+    email: string;
+    role: string;
+  } | null;
+}
 
 // --- Checklists ---
 export interface ChecklistItem {

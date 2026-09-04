@@ -1637,3 +1637,191 @@ a:hover { color: var(--accent-indigo-hover); }
   font-size: var(--font-xs);
   color: #93c5fd;
 }
+
+/* ================================================================
+   Service Audit Timeline Modal & Components
+   ================================================================ */
+
+.timeline-modal-container {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: 760px;
+}
+
+.timeline-meta-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--space-3);
+  background: var(--bg-glass);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  font-size: var(--font-sm);
+}
+
+.timeline-immutable-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: var(--radius-md);
+  font-size: var(--font-xs);
+  color: #a7f3d0;
+  line-height: 1.45;
+}
+
+.timeline-stream {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  max-height: 56vh;
+  overflow-y: auto;
+  padding-right: var(--space-1);
+}
+
+.timeline-item {
+  display: flex;
+  gap: var(--space-3);
+  position: relative;
+}
+
+.timeline-marker {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 20px;
+  flex-shrink: 0;
+  padding-top: var(--space-1);
+}
+
+.timeline-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--accent-primary);
+  box-shadow: 0 0 8px rgba(59, 130, 246, 0.4);
+  border: 2px solid var(--bg-surface);
+  flex-shrink: 0;
+}
+
+.timeline-line {
+  flex: 1;
+  width: 2px;
+  background: var(--border-primary);
+  margin-top: 4px;
+}
+
+.timeline-content {
+  flex: 1;
+  background: var(--bg-card);
+  border: 1px solid var(--border-primary);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  transition: border-color var(--transition-fast);
+}
+
+.timeline-content:hover {
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
+.timeline-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+}
+
+.timeline-title-row {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.timeline-action-badge {
+  font-size: var(--font-xs);
+  font-weight: 700;
+  letter-spacing: 0.03em;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  background: rgba(59, 130, 246, 0.15);
+  color: #93c5fd;
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  text-transform: uppercase;
+}
+
+.timeline-timestamp {
+  font-size: var(--font-xs);
+  color: var(--text-muted);
+}
+
+.timeline-actor {
+  display: flex;
+  align-items: center;
+  gap: var(--space-1);
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+}
+
+.timeline-actor-email {
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.timeline-diff {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+  font-size: var(--font-xs);
+  background: rgba(0, 0, 0, 0.25);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-primary);
+}
+
+.timeline-field-label {
+  font-weight: 600;
+  color: var(--text-secondary);
+  text-transform: capitalize;
+}
+
+.timeline-diff-old {
+  color: #fca5a5;
+  background: rgba(239, 68, 68, 0.1);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(239, 68, 68, 0.2);
+  text-decoration: line-through;
+}
+
+.timeline-diff-arrow {
+  color: var(--text-muted);
+  font-weight: 700;
+}
+
+.timeline-diff-new {
+  color: #86efac;
+  background: rgba(34, 197, 94, 0.1);
+  padding: 1px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid rgba(34, 197, 94, 0.2);
+  font-weight: 600;
+}
+
+.timeline-notes {
+  font-size: var(--font-xs);
+  color: var(--text-secondary);
+  background: var(--bg-glass);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-primary);
+}

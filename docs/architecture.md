@@ -70,6 +70,7 @@ The application defines two distinct roles via the `Role` enum:
 | View Overdue Alerts | Fleet-wide | Assigned records only | Server-side query rewrite |
 | Dismiss Overdue Alert | Yes | No (HTTP 403) | `requireFleetManager` |
 | Import Odometer CSV | Yes | No (HTTP 403) | `requireFleetManager` |
+| View Service Timeline | Yes (fleet-wide) | Assigned records only (HTTP 403 otherwise) | `services.ts` handler |
 | Export Service History CSV | Yes | Yes (scoped to assigned) | `services.ts` handler |
 | Create Checklist Item | Yes | No (HTTP 403) | `requireFleetManager` |
 | View Checklist Items | Yes (fleet-wide) | Assigned services only | `checklist.ts` scoping |
@@ -165,6 +166,21 @@ Within a single transaction:
 3. Create `AuditLog`: Action `'SERVICE_COMPLETED'`, recording user ID, odometer, and baseline shifts.
 
 If any step fails (e.g. database disconnect, odometer constraint violation), the entire transaction rolls back cleanly, leaving zero partial records or orphan audit logs.
+
+### Immutable Service Audit Timeline (`GET /api/services/:id/timeline`)
+To ensure history cannot be rewritten or concealed:
+1. **Append-Only Immutability**:
+   * No `PUT`, `PATCH`, or `DELETE` endpoints exist for audit logs. Audit records are permanently immutable and system-generated.
+2. **Strict RBAC & Tenant Scoping**:
+   * Fleet Managers can inspect the audit timeline of any service record across the entire fleet.
+   * Technicians can inspect timeline history **strictly for services assigned to them**. Unassigned technicians attempting access receive `HTTP 403 Forbidden`.
+   * Non-existent service IDs return `HTTP 404 Not Found`.
+3. **Actor Privacy & Sanitization**:
+   * Audit events join with `changedBy` selecting strictly `{ id, email, role }`. `passwordHash` is never exposed under any circumstance.
+4. **Chronological Event Flow**:
+   * Events are returned sorted by `createdAt: 'asc'` to reproduce the true lifecycle stream (`SERVICE_CREATED`, `TECHNICIAN_ASSIGNED`, `SERVICE_BOOKED`, `SERVICE_STARTED`, `SERVICE_COMPLETED`, etc.).
+5. **Interactive Frontend Timeline**:
+   * Every service row provides a `🕒 Timeline` action opening a dedicated modal displaying chronological events with timestamps, actor credentials, action badges, and value diffs (`oldValue -> newValue`).
 
 ---
 

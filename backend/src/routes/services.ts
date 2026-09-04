@@ -235,6 +235,48 @@ router.get('/:id', async (req: AuthRequest, res: Response): Promise<void> => {
   }
 });
 
+// GET /api/services/:id/timeline - Immutable audit timeline for a service record
+router.get('/:id/timeline', async (req: AuthRequest, res: Response): Promise<void> => {
+  const id = Array.isArray(req.params.id) ? req.params.id[0] : req.params.id;
+  const userRole = req.user?.role;
+  const userId = req.user?.id;
+
+  try {
+    const serviceRecord = await prisma.serviceRecord.findUnique({
+      where: { id },
+      include: {
+        assignments: { select: { userId: true } },
+      },
+    });
+
+    if (!serviceRecord) {
+      res.status(404).json({ error: 'Service record not found' });
+      return;
+    }
+
+    if (userRole === 'TECHNICIAN') {
+      const isAssigned = serviceRecord.assignments.some((a) => a.userId === userId);
+      if (!isAssigned) {
+        res.status(403).json({ error: 'Forbidden: You are not assigned to this service record' });
+        return;
+      }
+    }
+
+    const auditLogs = await prisma.auditLog.findMany({
+      where: { serviceRecordId: id },
+      orderBy: { createdAt: 'asc' },
+      include: {
+        changedBy: { select: { id: true, email: true, role: true } },
+      },
+    });
+
+    res.json(auditLogs);
+  } catch (error) {
+    console.error('Get service timeline error:', error);
+    res.status(500).json({ error: 'Failed to get service timeline' });
+  }
+});
+
 // POST /api/services - Create service record (Fleet Manager only)
 // Always initializes status to DUE and sets dueDate to creation time (due now).
 router.post('/', requireFleetManager, async (req: AuthRequest, res: Response): Promise<void> => {

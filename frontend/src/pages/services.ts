@@ -1,4 +1,4 @@
-import { serviceAPI, vehicleAPI, authAPI, checklistAPI, type ChecklistItem } from '../api';
+import { serviceAPI, vehicleAPI, authAPI, checklistAPI, type ChecklistItem, type AuditLogEntry } from '../api';
 import { isFleetManager } from '../state';
 import { openModal, closeModal, getModalBody } from '../components/modal';
 import { toastSuccess, toastError, toastInfo } from '../components/toast';
@@ -62,6 +62,27 @@ function formatDate(dateStr: string | null): string {
     month: 'short',
     day: 'numeric',
   });
+}
+
+function formatDateTime(dateStr: string | null): string {
+  if (!dateStr) return '—';
+  return new Date(dateStr).toLocaleString('en-US', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+  });
+}
+
+function escapeHtml(str: string): string {
+  return str
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#039;');
 }
 
 export async function renderServicesPage(container: HTMLElement): Promise<void> {
@@ -221,6 +242,7 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
                   <div class="action-group">
                     ${getTransitionButtons(r)}
                     <button class="btn btn-ghost btn-sm checklist-btn" data-id="${r.id}" title="Inspection Checklist">📋 Checklist</button>
+                    <button class="btn btn-ghost btn-sm timeline-btn" data-id="${r.id}" title="Immutable Audit Timeline">🕒 Timeline</button>
                     <button class="btn btn-ghost btn-sm edit-desc-btn" data-id="${r.id}" title="Update work description">✏️</button>
                     ${isFleetManager() ? `<button class="btn btn-ghost btn-sm assign-btn" data-id="${r.id}" title="Manage technicians">👤+</button>` : ''}
                   </div>
@@ -330,6 +352,15 @@ function renderContent(container: HTMLElement, records: ServiceRecord[]): void {
       const serviceId = (btn as HTMLElement).dataset.id!;
       const record = records.find((r) => r.id === serviceId);
       if (record) showChecklistModal(record, container);
+    });
+  });
+
+  // Timeline buttons
+  container.querySelectorAll('.timeline-btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const serviceId = (btn as HTMLElement).dataset.id!;
+      const record = records.find((r) => r.id === serviceId);
+      if (record) showTimelineModal(record);
     });
   });
 
@@ -912,4 +943,117 @@ async function showChecklistModal(record: ServiceRecord, _pageContainer: HTMLEle
   }
 
   await renderModalContent();
+}
+
+async function showTimelineModal(record: ServiceRecord): Promise<void> {
+  openModal(
+    `Audit Timeline — ${record.vehicle.registration}`,
+    `<div class="loading-overlay" style="min-height: 180px;"><div class="spinner"></div></div>`,
+    `<button class="btn btn-secondary" id="timeline-modal-close">Close</button>`
+  );
+
+  document.getElementById('timeline-modal-close')?.addEventListener('click', closeModal);
+
+  const modalBody = getModalBody();
+  if (!modalBody) return;
+
+  try {
+    const res = await serviceAPI.timeline(record.id);
+    const events: AuditLogEntry[] = res.data;
+
+    modalBody.innerHTML = `
+      <div class="timeline-modal-container">
+        <!-- Meta Header -->
+        <div class="timeline-meta-header">
+          <div>
+            <strong>${record.vehicle.registration}</strong> — ${record.vehicle.make} ${record.vehicle.model}
+            <div style="font-size: var(--font-xs); color: var(--text-muted); margin-top: 2px;">
+              Service: ${escapeHtml(record.description)}
+            </div>
+          </div>
+          <span class="badge ${STATUS_BADGE_CLASS[record.status] || ''}">${formatStatus(record.status)}</span>
+        </div>
+
+        <!-- Immutable / Tamper Proof Banner -->
+        <div class="timeline-immutable-banner">
+          <span style="font-size: 1.1rem;">🔒</span>
+          <div>
+            <strong>Immutable Audit Trail — System Enforced</strong><br/>
+            <span>This log is permanently recorded and append-only. No edits, modifications, or deletions are permitted, even by system administrators.</span>
+          </div>
+        </div>
+
+        <!-- Timeline Events Stream -->
+        ${events.length === 0 ? `
+          <div class="empty-state" style="padding: var(--space-4);">
+            <div class="empty-icon">📜</div>
+            <h3>No audit records</h3>
+            <p>No historical timeline entries have been recorded for this service.</p>
+          </div>
+        ` : `
+          <div class="timeline-stream">
+            ${events.map((evt, idx) => {
+              const actorEmail = evt.changedBy?.email || 'System / Automated';
+              const actorRole = evt.changedBy?.role || 'SYSTEM';
+              const isManager = actorRole === 'FLEET_MANAGER';
+              const roleBadgeClass = isManager ? 'badge-manager' : (actorRole === 'TECHNICIAN' ? 'badge-role' : 'badge-system');
+
+              // Format action label
+              const actionLabel = evt.action.replace(/_/g, ' ');
+
+              // Change transition
+              const hasDiff = evt.oldValue !== null || evt.newValue !== null;
+
+              return `
+                <div class="timeline-item" data-event-id="${evt.id}">
+                  <div class="timeline-marker">
+                    <div class="timeline-dot"></div>
+                    ${idx < events.length - 1 ? '<div class="timeline-line"></div>' : ''}
+                  </div>
+                  <div class="timeline-content">
+                    <div class="timeline-header">
+                      <div class="timeline-title-row">
+                        <span class="timeline-action-badge">${escapeHtml(actionLabel)}</span>
+                        <span class="timeline-timestamp">🕒 ${formatDateTime(evt.createdAt)}</span>
+                      </div>
+                      <div class="timeline-actor">
+                        <span style="color: var(--text-muted);">By:</span>
+                        <span class="timeline-actor-email">${escapeHtml(actorEmail)}</span>
+                        <span class="badge ${roleBadgeClass}" style="font-size: 0.65rem; padding: 1px 6px;">${actorRole}</span>
+                      </div>
+                    </div>
+
+                    ${hasDiff ? `
+                      <div class="timeline-diff">
+                        <span class="timeline-field-label">${escapeHtml(evt.field)}:</span>
+                        <span class="timeline-diff-old">${escapeHtml(evt.oldValue ?? 'None')}</span>
+                        <span class="timeline-diff-arrow">→</span>
+                        <span class="timeline-diff-new">${escapeHtml(evt.newValue ?? 'None')}</span>
+                      </div>
+                    ` : ''}
+
+                    ${evt.notes ? `
+                      <div class="timeline-notes">
+                        <strong>Context / Notes:</strong> ${escapeHtml(evt.notes)}
+                      </div>
+                    ` : ''}
+                  </div>
+                </div>
+              `;
+            }).join('')}
+          </div>
+        `}
+      </div>
+    `;
+  } catch (err: unknown) {
+    const axErr = err as { response?: { status?: number; data?: { error?: string } } };
+    const errMsg = axErr.response?.data?.error ?? 'Could not load service timeline.';
+    modalBody.innerHTML = `
+      <div class="empty-state" style="padding: var(--space-4); color: var(--error);">
+        <div class="empty-icon">⚠️</div>
+        <h3>Access Denied or Failed</h3>
+        <p>${escapeHtml(errMsg)}</p>
+      </div>
+    `;
+  }
 }
